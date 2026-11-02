@@ -53,6 +53,9 @@ repo 外、只存在 TG VM 的設定（不進 repo，因為 repo 可能公開）
 - `marked` 鎖 `4.3.0`（同 markdownReader）。
 - 快報內容來自外部網頁經 AI 整理，屬不可信輸入：**原始 HTML 一律跳脫不渲染**，連結只允許 `https:`。
 - 手機與桌面都能讀，深色模式跟隨系統。
+- 讀資料：報告與清單放在同一個 repo，網頁用同站相對路徑讀 `reports/index.json` 與 `reports/YYYY-MM-DD.md`。（已驗證：從 github.io 頁面讀同站檔案成功）
+- 快取：GitHub Pages 回應帶 `Cache-Control: max-age=600`（已驗證），瀏覽器可能拿到 10 分鐘前的清單；讀清單與報告時一律用 `fetch(..., {cache: 'no-store'})`。
+- 和另外兩個工具不同，下載 `index.html` 後用 `file://` 離線開啟讀不到報告，只支援網址開啟。
 
 ### 3.2 交易日曆
 
@@ -210,7 +213,7 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 | Claude 額度用完時 `claude -p` 的行為 | 無法刻意觸發 | 不驗；腳本只看非零結束與格式檢查，不依賴錯誤訊息文字 |
 | 封鎖 `browser_file_upload` 後確實不可用 | 實作時一併測 | 實作時 |
 | 完整報告一次的耗時與用量 | 要先有 `prompts/brief.md` | 實作後第一次試跑。參考：只查一個報價的測試，Codex 用了約 2–3 萬 tokens |
-| push 權限與 Pages 部署時間 | repo 尚未建立（待決定第 1 項） | repo 建立後 |
+| push 權限與 Pages 部署時間 | repo 已建立但尚未接上本機、尚未開 Pages；名稱待確認（第 9 節第 1 項） | 名稱確認、首次 push 後 |
 
 已驗證但值得記錄的環境事實：systemd 環境下 `gh` 已登入 cyhbench、token 含 `repo` 權限，git 透過 `gh auth git-credential` 可存取私人 repo；桌面 `:0` 有設自動登入（Brave 以有畫面模式在 `:0` 執行，重開機後需要桌面已登入）。
 
@@ -269,15 +272,12 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 - 重點美股＝Mag 7。
 - 失敗時發 Telegram 通知。
 - 排程 AI 的權限：同意只放行瀏覽工具、git 由腳本做。實測後收得更緊：AI 連單一暫存檔都不寫，報告從輸出取得（見 3.3）。
+- repo 公開（public）。GitHub Free 方案的 Pages 只能用在 public repo；Pro／Team 的 private repo 雖可開 Pages，網站本身仍公開（GitHub 官方文件，已查證）。repo 內不放任何秘密。
+- 舊 skill 的任何內容（來源網址、資料格式、時區、休市表、篩選規則、中文對照表）都要重新實測或重新定義才能用，不得直接沿用。本規格第 4 節的來源皆已重測；Business Insider、Finviz、Reuters 不再使用（Reuters RSS 網域已失效，Finviz 表格無資料列）。
 
 ## 9. 待使用者決定
 
-1. **repo 公開與否、名稱**。GitHub 官方文件（已查證）：
-   - GitHub Free：Pages 只能用在 **public** repo。
-   - GitHub Pro／Team：private repo 也能開 Pages，但**網站本身仍然公開**，任何人都能讀快報；private 只藏 GitHub 上的原始碼與 commit 歷史。
-   - 只有 GitHub Enterprise Cloud 的組織能讓網站本身限權限瀏覽。
-   - 目前查不到 cyhbench 的方案（token 沒有讀方案的權限）。
-
-   選項：
-   - A. public repo `cyhbench/cyhUsPremarketBrief`（建議）：免費，和另外兩個工具相同；repo 內沒有任何秘密（token、chat id 都在 repo 外）。網址 `https://cyhbench.github.io/cyhUsPremarketBrief/`。
-   - B. private repo（需要 Pro 方案）：網站一樣公開；注意若用「從分支根目錄發布」，`docs/`、`bin/` 也會被網站一起公開，要改成只發布網站資料夾才藏得住。
+1. **repo 名稱結尾的 `-`**：使用者已建立 public repo，實際名稱為 `cyhbench/cyhUsPremarketBrief-`（結尾有 `-`，2026-11-02 04:24 UTC 建立，內含一個 README 初始 commit）。照這個名稱，網址會是 `https://cyhbench.github.io/cyhUsPremarketBrief-/`。若非本意，要在 GitHub 上改名後再接上。
+2. **網頁要不要在開啟時抓即時報價**：實測從 github.io 頁面可以直接讀 CNBC 報價網址與 CNBC RSS（跨站允許）；ForexFactory XML 則被瀏覽器擋（`Failed to fetch`）。
+   - A. 維持現行規格（建議）：網頁只顯示 09:00 產生的快照，歷史報告的數字保持當時的值；與 2.2「不做即時報價」一致。
+   - B. 另加「即時報價」區塊：開網頁時由瀏覽器直接讀 CNBC，數字不經 AI 抄寫；代價是依賴非公開網址、每位訪客都會打 CNBC，且須修改 2.2 範圍。
