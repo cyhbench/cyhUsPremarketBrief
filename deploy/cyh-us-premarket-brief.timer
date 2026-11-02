@@ -1,0 +1,11 @@
+[Unit]
+Description=US premarket brief, 09:00 America/New_York on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:00:00 America/New_York
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+
+[Install]
+WantedBy=timers.target

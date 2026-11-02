@@ -1,0 +1,10 @@
+[Unit]
+Description=US premarket brief (cyhUsPremarketBrief)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/cyhUsPremarketBrief
+ExecStart=%h/projects/cyhUsPremarketBrief/bin/run-brief
+# AI 與 Brave 逾時由包裝器自己管；這裡只是最後防線。
+TimeoutStartSec=15min
+Environment=DISPLAY=:0

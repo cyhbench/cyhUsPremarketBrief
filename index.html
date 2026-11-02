@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>美股盤前快報</title>
+<style>
+  :root { --bg:#fff; --fg:#1d1d1f; --muted:#666; --line:#d8d8dc; --accent:#0b5cad; --warn:#8a5a00; --warn-bg:#fff4d6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#16161a; --fg:#e8e8ea; --muted:#9a9aa2; --line:#33333a; --accent:#6db3ff; --warn:#ffd27a; --warn-bg:#3a3018; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.65 system-ui,-apple-system,"Noto Sans TC",sans-serif; }
+  main { max-width:860px; margin:0 auto; padding:16px; }
+  header { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:16px; }
+  h1.site { font-size:1.1rem; margin:0; }
+  select { font:inherit; padding:6px 8px; background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:6px; max-width:100%; }
+  #notice { display:none; background:var(--warn-bg); color:var(--warn); padding:8px 12px; border-radius:6px; margin-bottom:16px; }
+  #notice.show { display:block; }
+  #report a { color:var(--accent); overflow-wrap:anywhere; }
+  #report blockquote { margin:12px 0; padding:4px 12px; border-left:3px solid var(--line); color:var(--muted); }
+  #report table { border-collapse:collapse; display:block; overflow-x:auto; }
+  #report th, #report td { border:1px solid var(--line); padding:4px 8px; }
+  #report code { background:rgba(127,127,127,.15); padding:1px 4px; border-radius:4px; }
+  #report pre { overflow-x:auto; background:rgba(127,127,127,.12); padding:10px; border-radius:6px; }
+  #report h2 { margin-top:1.6em; border-bottom:1px solid var(--line); padding-bottom:4px; }
+  footer { margin-top:32px; color:var(--muted); font-size:.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 class="site">美股盤前快報</h1>
+    <label>日期 <select id="dates" aria-label="選擇報告日期" disabled></select></label>
+  </header>
+  <div id="notice" role="status"></div>
+  <article id="report">載入中…</article>
+  <footer>報告為 AI 於美東 09:00 起彙整的快照，數字可能延遲或有誤，僅供參考，不構成投資建議。</footer>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function validDate(s) {
+    if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
+    const d = new Date(s + 'T00:00:00Z');
+    return !isNaN(d) && d.toISOString().slice(0, 10) === s;
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function safeHttps(href) {
+    if (typeof href !== 'string' || /[\u0000-\u001f\u007f\s]/.test(href)) return null;
+    try {
+      const u = new URL(href);
+      if (u.protocol !== 'https:' || u.username || u.password) return null;
+      return u.href;
+    } catch (e) { return null; }
+  }
+
+  // 報告來自外部網頁經 AI 整理，視為不可信：原始 HTML 一律當純文字，連結只允許 https，圖片只顯示替代文字。
+  const renderer = new marked.Renderer();
+  renderer.html = (html) => esc(html);
+  renderer.link = (href, title, text) => {
+    const url = safeHttps(href);
+    if (!url) return text;
+    return '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + text + '</a>';
+  };
+  renderer.image = (href, title, text) => esc(text || '');
+  marked.setOptions({ renderer: renderer, mangle: false, headerIds: false });
+
+  function show(message, warn) {
+    const n = $('notice');
+    n.textContent = message || '';
+    n.classList.toggle('show', !!message);
+    n.style.fontWeight = warn ? '600' : '';
+  }
+  function fail(message) {
+    $('report').textContent = message;
+    $('dates').disabled = true;
+    show('');
+  }
+  async function getText(path) {
+    const r = await fetch(path, { cache: 'no-store' });
+    return { status: r.status, text: r.ok ? await r.text() : '' };
+  }
+  function nyToday() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+  }
+
+  async function loadReport(date, isLatest) {
+    $('report').textContent = '載入中…';
+    let res;
+    try { res = await getText('reports/' + date + '.md'); } catch (e) { return fail('讀取報告失敗，請稍後重試。'); }
+    if (res.status === 404) return fail('報告更新中，請稍後重試。');
+    if (!res.text) return fail('讀取報告失敗（HTTP ' + res.status + '）。');
+    if (res.text.split('\n', 1)[0].indexOf(date) === -1) return fail('報告內容與日期不符，請稍後重試。');
+    $('report').innerHTML = marked.parse(res.text);
+    const today = nyToday();
+    show(date !== today ? '目前顯示的是 ' + date + ' 的快報（美東今日為 ' + today + '）' + (isLatest ? '，今日報告尚未發布或未產生。' : '。') : '', true);
+    document.title = '美股盤前快報 ' + date;
+  }
+
+  async function init() {
+    let res;
+    try { res = await getText('reports/index.json'); } catch (e) { return fail('讀取報告清單失敗，請稍後重試。'); }
+    if (res.status === 404) return fail('尚無報告。');
+    let list;
+    try {
+      const data = JSON.parse(res.text);
+      if (data.schema_version !== 1 || !Array.isArray(data.reports)) throw new Error('schema');
+      list = data.reports.map((e) => e && e.date).filter(validDate);
+    } catch (e) { return fail('報告清單格式不合法。'); }
+    list = Array.from(new Set(list)).sort().reverse();
+    if (!list.length) return fail('尚無報告。');
+
+    const sel = $('dates');
+    list.forEach((d) => { const o = document.createElement('option'); o.value = d; o.textContent = d; sel.appendChild(o); });
+    sel.disabled = false;
+    const wanted = location.hash.slice(1);
+    sel.value = list.includes(wanted) ? wanted : list[0];
+    sel.addEventListener('change', () => { location.hash = sel.value; loadReport(sel.value, sel.value === list[0]); });
+    loadReport(sel.value, sel.value === list[0]);
+  }
+  init();
+})();
+</script>
+</body>
+</html>
