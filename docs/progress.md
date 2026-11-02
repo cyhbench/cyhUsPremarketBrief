@@ -116,3 +116,16 @@ repo 設定我不能改（AGENTS.md），GitHub Pages 目前**尚未啟用**（`
 - 舊 progress 對通知、權限、Brave 隔離、dry-run 的敘述過度概括，已於第 2、3 節改成可支持的範圍；兩次 dry-run 的報告與工具紀錄當時沒有保留，無法重核，保持「未重核」。
 - review 列的退化實驗已轉成測試：`telegram_notify` 回 `False`（B5）、缺 `reports/`（B1）、啟動類例外（B3）、09:24:59（B4）、相反 `-c`（B6）、canary 反例（B6）。我沒有逐一在記憶體重做 review 的每個 mock 實驗，只確認上述測試對應的情境會失敗：viewer 與 argv 重複設定做過負向控制，其餘靠新測試直接斷言該行為。
 - 未驗證：真實盤前資料（`PRE_MKT`、08:30 實際值、RSS 新鮮度）、用量、systemd 實際行為、Pages 實際時間、連續日驗收。
+
+## 7. 修正第 3 輪（回應 `docs/review.md` 第 2 輪；使用者同意範圍：R2-B4、R2-B7、R2-S1、R2-S2）
+
+驗證：`python3 tests/test_brief.py`（60 tests OK，原 56 加 4 個新測試與擴充的 canary 案例）、`node tests/viewer_race.js`（OK）。先寫測試、在未改程式時執行：新增的 5 個案例（4 個新測試加擴充的 `test_codex_shell_item_fails`）全部失敗，修正後全綠。未啟用 timer，未跑付費 CLI canary。
+
+| 項 | 結論 | 怎麼改 | 怎麼驗證 |
+|---|---|---|---|
+| R2-B4 | 同意，已修 | `publish()` 把期限檢查移到秘密掃描之後、寫兩檔之前（原檢查在掃描前，掃描後才寫檔） | `test_scan_crossing_hard_deadline_writes_no_report_files`：AI 完成於 09:24:29、掃描耗 32 秒 → `DEADLINE_EXCEEDED`，報告與清單均未建立、`git status` 乾淨、通知 1 則。修正前此測試失敗（兩檔存在）。原有成功發布案例仍通過，作為正向對照 |
+| R2-B7 | 同意，已修 | `pages_visible` 每次請求前檢查剩餘預算（已逾期不發請求），請求 timeout 取 `min(10, 剩餘秒數)`，回應收到後若已逾 `until` 不算成功 | `test_pages_success_after_deadline_is_false`（09:29:59 起、每請求耗 8 秒 → False，且第一次 timeout ≤ 1）、`test_pages_already_past_deadline_makes_no_request`（逾期零請求）。修正前兩者失敗。期限內成功／等部署後成功／404／過期清單／內容不符等原案例仍通過 |
+| R2-S1 | 同意，已修 | canary 的 Codex 項目若 server 不是 `brave`，名稱保留 `server:tool` 前綴；`evaluate` 改為「任何不在 `BRAVE_TOOLS` 白名單的成功呼叫即失敗」（原本只比對黑名單，Claude／Codex 共用） | `test_codex_shell_item_fails` 加三個反例：其他 server 的 `read_file`、同名但 server 錯誤的 `browser_navigate`、brave 但不在白名單的工具，均被判失敗；原通過串流仍為空錯誤清單。既有合成串流補上 `server: "brave"`。**限制**：Codex 事件含 `server` 欄位是依測試資料與慣例假設，未用實跑串流核對；canary 本身沒有重跑（耗額度），所以真實 Codex 輸出是否仍 PASS 為**未驗證**，下次手動跑 canary 時確認 |
+| R2-S2 | 同意，已修 | 最後防線只記例外型別（`UNEXPECTED RuntimeError`），不記訊息 | `test_unexpected_exception_text_never_reaches_log`：含假標記與 ESC 控制字元的 `RuntimeError`，log 有型別、無標記、無 `\x1b`；修正前失敗。舊測試仍斷言通知不含原始訊息 |
+
+剩餘風險：Pages 對真實網站的確認、systemd 行為、canary 實跑等仍如第 5、6 節所列未驗證；請求 timeout 取整數以下的小數秒由 `urllib` 接受，未對真實網路驗證。

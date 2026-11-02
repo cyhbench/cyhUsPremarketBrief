@@ -174,9 +174,12 @@ def pages_visible(d, full, until, base=PAGES_URL, urlopen=urllib.request.urlopen
     """輪詢 Pages 直到清單含當日且報告本文等於這次產物；到 until 仍不符回 False。"""
     def fetch(path):
         # 查詢字串避開 CDN／瀏覽器快取；失敗（404、連線）一律當作尚未可見
+        left = (until - clock()).total_seconds()
+        if left <= 0:
+            return None
         try:
             with urlopen(urllib.request.Request(f"{base}{path}?t={int(time.time())}",
-                                                headers={"Cache-Control": "no-cache"}), timeout=10) as r:
+                                                headers={"Cache-Control": "no-cache"}), timeout=min(10, left)) as r:
                 return r.read().decode("utf-8")
         except (OSError, ValueError):
             return None
@@ -186,7 +189,8 @@ def pages_visible(d, full, until, base=PAGES_URL, urlopen=urllib.request.urlopen
             listed = idx is not None and any(e.get("date") == d.isoformat() for e in json.loads(idx)["reports"])
         except (ValueError, KeyError, TypeError, AttributeError):
             listed = False
-        if listed and fetch(f"reports/{d.isoformat()}.md") == full:
+        # 回應在期限後才收到，不能證明期限前已可見
+        if listed and fetch(f"reports/{d.isoformat()}.md") == full and clock() <= until:
             return True
         if clock() + timedelta(seconds=PAGES_POLL_SECONDS) > until:
             return False
@@ -240,9 +244,9 @@ def publish(repo, d, producer, full, deps, dl, log):
         if deps.clock() >= dl["publish"]:
             raise Failure(code, message)
 
-    before_step("DEADLINE_EXCEEDED", "已超過發布期限（09:24:30），不發布")
     if deps.scan is None or deps.scan(full):
         raise Failure("SECRET_SCAN", "秘密掃描發現問題或掃描器不可用，不發布")
+    before_step("DEADLINE_EXCEEDED", "已超過發布期限（09:24:30），不發布")  # 掃描可能耗時，須在寫入正式產物前檢查
     rel = f"reports/{d.isoformat()}.md"
     (repo / "reports").mkdir(exist_ok=True)  # 全新 clone 沒有此目錄（git 不追蹤空目錄）
     with open(repo / rel, "x", encoding="utf-8") as f:  # 不覆寫
@@ -288,7 +292,7 @@ def run(repo, state_dir, deps, report_date=None, dry_run=False):
         except Failure as e:
             failure = e
         except Exception as e:  # 最後防線：任何未預期例外也走同一個失敗出口，通知不含原始錯誤
-            log_line(log, f"UNEXPECTED {type(e).__name__}: {e}")
+            log_line(log, f"UNEXPECTED {type(e).__name__}")  # 不記訊息：可能含秘密或控制字元
             failure = Failure("UNEXPECTED_ERROR", "內部錯誤，詳見記錄")
         log_line(log, f"FAILED {failure.code} {failure.message}")
         if not dry_run and deps.notify:

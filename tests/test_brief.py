@@ -486,6 +486,16 @@ class FailureExitTests(Fx):
         self.assertNotIn("secret-looking-detail", self.sent[0])
         self.assertIn("RuntimeError", (self.state / "2026-11-03.log").read_text())
 
+    def test_unexpected_exception_text_never_reaches_log(self):
+        def boom(prompt, timeout):
+            raise RuntimeError("MARKER-NOT-A-REAL-SECRET\x1b[31m")
+        self.deps.claude = boom
+        self.run_at()
+        log = (self.state / "2026-11-03.log").read_text()
+        self.assertIn("UNEXPECTED RuntimeError", log)  # 正向：型別仍記錄
+        self.assertNotIn("MARKER-NOT-A-REAL-SECRET", log)
+        self.assertNotIn("\x1b", log)
+
     def test_service_outlives_wrapper_and_real_fallback_after_claude_timeout(self):
         unit = (ROOT / "deploy/cyh-us-premarket-brief.service").read_text()
         minutes = int(re.search(r"^TimeoutStartSec=(\d+)min", unit, re.M).group(1))
@@ -523,6 +533,22 @@ class FailureExitTests(Fx):
             status, detail = self.run_at()
         self.assertEqual((status, detail.split(":")[0]), ("FAILED", "PUSH_SKIPPED_LATE"))
         self.assertEqual(pushes, [])
+        self.assertEqual(len(self.sent), 1)
+
+    def test_scan_crossing_hard_deadline_writes_no_report_files(self):
+        def late_claude(prompt, timeout):
+            self.now = ny_at(D, 9, 24, 29).astimezone(timezone.utc)
+            return body()
+
+        def slow_scan(text):
+            self.now += timedelta(seconds=32)
+            return 0
+        self.deps.claude, self.deps.scan = late_claude, slow_scan
+        status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "DEADLINE_EXCEEDED"))
+        self.assertFalse((self.repo / f"reports/{D.isoformat()}.md").exists())
+        self.assertFalse((self.repo / "reports/index.json").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "")  # 不留髒工作目錄，下次不會被 DIRTY_WORKTREE 擋
         self.assertEqual(len(self.sent), 1)
 
     def test_git_timeouts_never_exceed_remaining_budget(self):
@@ -629,6 +655,25 @@ class SenderAndPagesTests(unittest.TestCase):
         ok, n = self.pages(lambda p, i: None if i < 2 else (idx if p.endswith("json") else "REPORT"))
         self.assertEqual((ok, n), (True, 2))
 
+    def test_pages_success_after_deadline_is_false(self):
+        idx = json.dumps({"reports": [{"date": "2026-11-03"}]})
+        now, timeouts = [ny_at(D, 9, 29, 59)], []
+
+        def opener(req, timeout):
+            timeouts.append(timeout)
+            now[0] += timedelta(seconds=8)  # 請求本身耗時
+            return FakeResp(idx if req.full_url.split("?")[0].endswith("json") else "REPORT")
+        until = ny_at(D, 9, 30)
+        ok = briefrun.pages_visible(D, "REPORT", until, urlopen=opener, clock=lambda: now[0], sleep=lambda n: None)
+        self.assertFalse(ok)
+        self.assertLessEqual(timeouts[0], 1)  # 第一次請求 timeout 已扣掉剩餘預算
+
+    def test_pages_already_past_deadline_makes_no_request(self):
+        calls = []
+        ok = briefrun.pages_visible(D, "REPORT", ny_at(D, 9, 30), urlopen=lambda *a, **k: calls.append(1),
+                                    clock=lambda: ny_at(D, 9, 30, 1), sleep=lambda n: None)
+        self.assertEqual((ok, calls), (False, []))
+
     def test_pages_stale_or_missing_or_mismatched_content_is_false(self):
         old = json.dumps({"reports": [{"date": "2026-11-02"}]})
         new = json.dumps({"reports": [{"date": "2026-11-03"}]})
@@ -685,12 +730,16 @@ class CanaryJudgeTests(unittest.TestCase):
     def test_codex_shell_item_fails(self):
         def item(it):
             return json.dumps({"type": "item.completed", "item": it})
-        snap = {"type": "mcp_tool_call", "tool": "browser_snapshot", "status": "failed",
+        snap = {"type": "mcp_tool_call", "server": "brave", "tool": "browser_snapshot", "status": "failed",
                 "result": {"content": [{"type": "text", "text": "File access denied: outside allowed roots"}]}}
-        nav = {"type": "mcp_tool_call", "tool": "browser_navigate", "status": "completed", "result": {"content": []}}
+        nav = {"type": "mcp_tool_call", "server": "brave", "tool": "browser_navigate", "status": "completed", "result": {"content": []}}
         good = "\n".join([item(snap), item(nav)])
         self.assertEqual(canary.evaluate("codex", good)[0], [])
         self.assertTrue(canary.evaluate("codex", good + "\n" + item({"type": "command_execution"}))[0])
+        other = {"type": "mcp_tool_call", "server": "other", "tool": "read_file", "status": "completed", "result": {"content": []}}
+        self.assertTrue(canary.evaluate("codex", good + "\n" + item(other))[0])  # 白名單外 server 的成功呼叫
+        self.assertTrue(canary.evaluate("codex", good + "\n" + item(dict(nav, server="other")))[0])  # 同名工具但 server 不對
+        self.assertTrue(canary.evaluate("codex", good + "\n" + item(dict(nav, tool="read_file")))[0])  # brave 但不在白名單
         self.assertTrue(canary.evaluate("codex", item(nav))[0])  # 沒嘗試越界寫入 = 未驗證
 
 

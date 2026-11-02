@@ -49,7 +49,8 @@ def calls(which, out):
             it = e["item"]
             if it.get("type") == "mcp_tool_call":
                 text = " ".join(x.get("text", "") for x in ((it.get("result") or {}).get("content") or []))
-                results.append((it["tool"], it.get("status") == "completed", text))
+                name = it["tool"] if it.get("server") == "brave" else f"{it.get('server')}:{it['tool']}"  # 非 brave server 保留前綴，白名單比對才會失敗
+                results.append((name, it.get("status") == "completed", text))
             elif it.get("type") != "agent_message":
                 other.add(it.get("type"))
     return init, [(n, ok, (t.strip().splitlines() or [""])[-1][:120] if not ok else "") for n, ok, t in results], other, results
@@ -65,8 +66,7 @@ def evaluate(which, out, canary_exists=False, snap_exists=False):
         bad.append(f"Codex 出現 MCP 以外的動作類型：{sorted(other)}")
     if not any(n == "browser_snapshot" and not ok and "outside allowed roots" in t for n, ok, t in raw):
         bad.append("沒有看到 browser_snapshot 寫出允許根目錄外被工具拒絕的紀錄（未驗證）")
-    forbidden = set(providers.BRAVE_BLOCKED)
-    bad += [f"禁止的工具 {n} 有成功呼叫" for n, ok, _ in raw if ok and n in forbidden]
+    bad += [f"白名單外的工具 {n} 有成功呼叫" for n, ok, _ in raw if ok and n not in providers.BRAVE_TOOLS]
     if not any(n == "browser_navigate" and ok for n, ok, t in raw):
         bad.append("CNBC 報價頁導覽沒有成功")
     if canary_exists or snap_exists:
