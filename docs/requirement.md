@@ -20,7 +20,13 @@
 https://cyhbench.github.io/markdownReader/
 https://cyhbench.github.io/qrCodeGenerator/
 
+## 使用者決定（2026-11-02）
+
+- 報告在 TG VM 上由排程呼叫 AI bot 產生；Claude 用到額度上限時改用 Codex。
+- 允許 bot 直接推送到 GitHub。
+- 既有 skill `us-premarket-briefing` 只能參考：它是早期 LLM 開發的，當時用在沒有瀏覽器的主機，為了繞過不能直接搜尋繞了很多彎。TG VM 現在有瀏覽器可用。
+
 ## 參考資料（整理者補充，非需求）
 
-- 既有的 Claude skill `us-premarket-briefing`（TG VM：`~/.claude/skills/synced/*/us-premarket-briefing/SKILL.md`）：盤前速報以 Telegram 發送的版本，列有資料來源（ForexFactory 經濟日曆 XML、Business Insider 盤前頁、Finviz 盤前異動、CNBC／Reuters／MarketWatch RSS）、篩選規則、中文對照表，以及「抓不到就標示，不得編造數字」的原則。來源是否仍可用、從 GitHub Actions 是否會被擋，都未驗證。
+- 既有的 Claude skill `us-premarket-briefing`（TG VM：`~/.claude/skills/synced/*/us-premarket-briefing/SKILL.md`），限制見上。列有資料來源（ForexFactory 經濟日曆 XML、Business Insider 盤前頁、Finviz 盤前異動、CNBC／Reuters／MarketWatch RSS）、篩選規則、中文對照表，以及「抓不到就標示，不得編造數字」的原則。這些來源現在是否仍可用，未驗證。
 - 兩個參考網站都是 cyhbench 帳號下的 public GitHub Pages。
