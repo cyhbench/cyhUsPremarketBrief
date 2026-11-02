@@ -100,6 +100,17 @@ class DstTests(unittest.TestCase):
         h = reportcheck.header(D, "claude", ny_at(D, 9, 1), None)
         self.assertIn("美東 09:01 EST／台灣 11-03 22:01", h)
         self.assertIn("開盤 09:30 ET（台灣 22:30）", h)
+        self.assertNotIn("試跑", h)  # 正式報告不帶試跑標示
+        t = reportcheck.header(D, "claude", ny_at(D, 9, 1), None, True)
+        self.assertIn("🧪 試跑報告", t)
+        reportcheck.validate(t + body(), D, "claude", None, True)
+        with self.assertRaises(reportcheck.ReportInvalid):
+            reportcheck.validate(h + body(), D, "claude", None, True)
+
+    def test_prompt_asks_for_plain_reason_when_missing(self):
+        p = (ROOT / "prompts/brief.md").read_text(encoding="utf-8")
+        self.assertIn("哪一項資料", p)
+        self.assertNotIn("無法取得（來源名稱）", p)
 
 
 class ReportTests(unittest.TestCase):
@@ -402,7 +413,11 @@ class RunTests(Fx):
         status, detail = self.run_at(dry_run=True)
         self.assertEqual(status, "DRY_RUN_OK")
         self.assertEqual(self.git("status", "--porcelain"), "")
-        self.assertTrue((self.state / "dryrun/2026-11-03.md").exists())
+        out = (self.state / "dryrun/2026-11-03.md").read_text(encoding="utf-8")
+        self.assertIn("🧪 試跑報告", out)
+        # 產生時間是實際時間，不是模擬的 09:03
+        self.assertNotIn("產生時間：美東 09:03", out)
+        self.assertIn("產生時間：美東", out)
         self.assertEqual(self.remote_log().split("\n")[0], "init")
 
     def test_baseline_and_gap_go_into_prompt(self):

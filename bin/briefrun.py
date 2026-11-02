@@ -209,7 +209,7 @@ def log_line(log, msg):
         f.write(f"{datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ} {msg}\n")
 
 
-def generate(prompt, d, deps, dl, log, early):
+def generate(prompt, d, deps, dl, log, early, dry_run=False):
     """依序試 Claude、Codex；回傳 (producer, 完整報告)。全部失敗丟 Failure。"""
     reasons = []
     for name, fn, limit in (("claude", deps.claude, dl["claude"]), ("codex", deps.codex, dl["codex"])):
@@ -221,8 +221,10 @@ def generate(prompt, d, deps, dl, log, early):
         started = deps.clock()
         try:
             body = reportcheck.clean_body(fn(prompt, remaining))
-            full = reportcheck.header(d, name, deps.clock(), early) + body
-            reportcheck.validate(full, d, name, early)
+            # 試跑的 deps.clock 是模擬時間，產生時間要用實際時間
+            made = datetime.now(timezone.utc) if dry_run else deps.clock()
+            full = reportcheck.header(d, name, made, early, dry_run) + body
+            reportcheck.validate(full, d, name, early, dry_run)
         except providers.ProviderFailed as e:
             reasons.append(f"{name}:{e.code}")
         except reportcheck.ReportInvalid as e:
@@ -337,7 +339,7 @@ def _run_locked(repo, state_dir, deps, d, dry_run, log):
     if now >= dl["claude"]:
         raise Failure("MISSED_START_WINDOW", "超過 09:15 才啟動，不產生")
     early = cal.early_close(d)
-    producer, full = generate(build_prompt(repo, cal, d, now, index), d, deps, dl, log, early)
+    producer, full = generate(build_prompt(repo, cal, d, now, index), d, deps, dl, log, early, dry_run)
     if dry_run:
         out = state_dir / "dryrun" / f"{d.isoformat()}.md"
         out.parent.mkdir(exist_ok=True)

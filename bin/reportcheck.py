@@ -23,7 +23,7 @@ class ReportInvalid(Exception):
     pass
 
 
-def header(report_date, producer, generated_at, early_close):
+def header(report_date, producer, generated_at, early_close, dry_run=False):
     ny = generated_at.astimezone(NY)
     tpe = generated_at.astimezone(TPE)
     who = {"claude": "Claude", "codex": "Codex"}[producer]
@@ -32,6 +32,8 @@ def header(report_date, producer, generated_at, early_close):
         "",
         f"> 產生時間：美東 {ny:%H:%M} {ny.tzname()}／台灣 {tpe:%m-%d %H:%M} ｜ 產生者：{who} ｜ 今日開盤 09:30 ET（台灣 {_open_tpe(report_date)}）",
     ]
+    if dry_run:  # 試跑的 AI 時鐘是模擬的 09:00 ET，上面的時間是實際產生時間；內容所依的時點另行標明
+        lines += ["", f"> 🧪 試跑報告（dry-run）：未發布、非排程產出；AI 被告知的時點是模擬的美東 {report_date.isoformat()} 09:00，資料與時點可能不一致。"]
     if early_close:
         lines += ["", f"> ⚠️ 早收日：今日 {early_close:%H:%M} ET 收盤。"]
     return "\n".join(lines) + "\n\n"
@@ -66,7 +68,7 @@ def clean_body(raw):
     return raw[idx:].strip() + "\n"
 
 
-def validate(text, report_date, producer, early_close=None):
+def validate(text, report_date, producer, early_close=None, dry_run=False):
     """完整報告（含標題行）檢查；不合格丟 ReportInvalid。"""
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise ReportInvalid("報告超過大小上限")
@@ -79,6 +81,8 @@ def validate(text, report_date, producer, early_close=None):
     m = re.search(r"^> 產生時間：美東 \d\d:\d\d E[SD]T／台灣 \d\d-\d\d \d\d:\d\d ｜ 產生者：(Claude|Codex) ｜", text, re.M)
     if not m or m.group(1).lower() != producer:
         raise ReportInvalid("產生時間或產生者行不符")
+    if dry_run and "🧪 試跑報告" not in text:
+        raise ReportInvalid("試跑報告未標示")
     if early_close and f"{early_close:%H:%M} ET 收盤" not in text:
         raise ReportInvalid("早收日未註明")
     order, sections = _body_sections(text)

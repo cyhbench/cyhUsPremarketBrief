@@ -1,5 +1,9 @@
 # 規格：美股盤前快報（US Premarket Brief）
 
+文件版本：1.1
+
+日期：2026-11-02（Asia/Taipei）
+
 依據：[requirement.md](requirement.md)。撰寫日 2026-11-02。
 
 標示說明：**（已驗證）**＝2026-11-02 在 TG VM 實測確認，時間為美東週日深夜（03:56–04:17 UTC），不是盤前時段；**（未驗證）**＝尚未實測。盤前時段才會出現的資料（盤前報價、08:30 公布的實際值）列在第 5.4 節，要在盤前時段補驗。
@@ -275,6 +279,7 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 - repo 公開（public）。GitHub Free 方案的 Pages 只能用在 public repo；Pro／Team 的 private repo 雖可開 Pages，網站本身仍公開（GitHub 官方文件，已查證）。repo 內不放任何秘密。
 - 舊 skill 的任何內容（來源網址、資料格式、時區、休市表、篩選規則、中文對照表）都要重新實測或重新定義才能用，不得直接沿用。本規格第 4 節的來源皆已重測；Business Insider、Finviz、Reuters 不再使用（Reuters RSS 網域已失效，Finviz 表格無資料列）。
 - repo：`cyhbench/cyhUsPremarketBrief`（public，2026-11-02 04:30 UTC 建立，內含一個 README 初始 commit），網址 `https://cyhbench.github.io/cyhUsPremarketBrief/`。先前誤建的 `cyhUsPremarketBrief-` 由使用者自行刪除。
+- 漲跌顏色採用 B：美國習慣，漲綠跌紅（2026-11-02 使用者回覆，選自 ui-design 第 3.3 節 A／B）。全站一致；一律保留 `+`／`-` 或原有文字，不讓顏色成為唯一線索。
 - 網頁不抓即時報價，只顯示 09:00 產生的快照，歷史報告保留當時的數字（維持 2.2）。
 
 ## 9. 待使用者決定

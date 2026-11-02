@@ -1,12 +1,16 @@
 # 進度：美股盤前快報（實作）
 
-實作者：Claude，日期 2026-11-02。依據 [spec.md](spec.md)、[design.md](design.md)。**排程 timer 尚未啟用**（等使用者驗收）。第 1 輪修正見第 6 節（2026-11-02，Claude）。下一步：Codex 第 2 輪 review，再由使用者驗收。
+文件版本：1.1
+
+日期：2026-11-02（Asia/Taipei）
+
+實作者：Claude，日期 2026-11-02。依據 [spec.md](spec.md)、[design.md](design.md)。**排程 timer 尚未啟用**（等使用者驗收）。第 1 輪修正見第 6 節（2026-11-02，Claude）。第 3 步 UI 實作（依 ui-design.md）見第 8 節（2026-11-02，Claude）。下一步：Codex review（含 UI），再由使用者驗收。
 
 ## 1. 已完成
 
 | 檔案 | 內容 |
 |---|---|
-| `index.html` | 檢視器：marked 4.3.0 鎖版；原始 HTML 轉成純文字、連結只允許 https（含帳密一律拒絕）、圖片只顯示替代文字；清單日期須為合法日期；404 顯示「報告更新中」；內容首行須含該日期；非美東今日時顯示醒目提示 |
+| `index.html` | 檢視器：marked 4.3.0 內嵌（原 CDN 載入已移除，見第 8 節）；原始 HTML 轉成純文字、連結只允許 https（含帳密一律拒絕）、圖片只顯示替代文字；清單日期須為合法日期；404 顯示「報告更新中」；內容首行須含該日期；非美東今日時顯示醒目提示 |
 | `data/nyse-calendar.json` | 2026、2027 休市與早收；2026-11-02 在 nyse.com 用 Brave 逐項對照過（與 design 第 3 節表一致） |
 | `bin/tradingcal.py` | 日曆載入驗證、狀態、上一交易日；平日缺年度丟 `CalendarUnknown`，不猜 |
 | `bin/reportcheck.py` | 標題行組裝（時間由程式產生，非 AI）、九標題與順序、fence 內假標題不計、必備項目、佔位字、https 來源、大小與控制字元 |
@@ -14,7 +18,7 @@
 | `bin/briefrun.py`、`bin/run-brief` | 包裝器：鎖、髒目錄檢查、pull、日曆、重入判斷、期限、備援、秘密掃描、commit／push、失敗通知一次 |
 | `prompts/brief.md` | 給 AI 的指示：來源、規則、中文名稱對照 |
 | `deploy/` | systemd service／timer 範本與說明（**未安裝**） |
-| `tests/test_brief.py` | 56 個測試，`python3 tests/test_brief.py` 全數通過；`tests/viewer_race.js`（node）測檢視器日期切換 |
+| `tests/test_brief.py` | 56 個測試，`python3 tests/test_brief.py` 全數通過；`tests/viewer_browser.js`（真實 Brave＋playwright-core）測檢視器，取代已刪除的 `viewer_race.js`（假 DOM） |
 | `tests/permission_canary.py` | 手動整合測試（耗額度）：驗證 AI 權限 |
 
 repo 外新增（依 spec 第 3 節）：`~/.config/cyhUsPremarketBrief/config.json`（chat id，權限 600，未進 repo）。
@@ -129,3 +133,50 @@ repo 設定我不能改（AGENTS.md），GitHub Pages 目前**尚未啟用**（`
 | R2-S2 | 同意，已修 | 最後防線只記例外型別（`UNEXPECTED RuntimeError`），不記訊息 | `test_unexpected_exception_text_never_reaches_log`：含假標記與 ESC 控制字元的 `RuntimeError`，log 有型別、無標記、無 `\x1b`；修正前失敗。舊測試仍斷言通知不含原始訊息 |
 
 剩餘風險：Pages 對真實網站的確認、systemd 行為、canary 實跑等仍如第 5、6 節所列未驗證；請求 timeout 取整數以下的小數秒由 `urllib` 接受，未對真實網路驗證。
+
+## 8. UI 實作（第 3 步，依 [ui-design.md](ui-design.md)）
+
+使用者本次決定與附帶要求：漲跌色用 B（漲綠跌紅，已記進 spec「已決定」）；marked 內嵌；VERSION；文件抬頭；dry-run 標示；prompt 改白話；格式收斂不做。**timer 未啟用。**
+
+### 改了什麼
+
+| 項 | 內容 |
+|---|---|
+| `index.html` | 依 ui-design 重寫：頁首＋日期選單＋「最新一份」、導言面板（日期大標、產生時間、試跑標示、漲跌圖例、七節目錄）、七節面板（編號 01–07）、資料來源 `<details>`（預設收合，附項數）、頁尾（網站版本、資料產生時間、免責）。表格：表頭單層、非空、不重複、欄數一致時，手機（<768px）轉卡片、電腦保留表格；否則整張保底表格＋局部橫捲容器（可聚焦、`role=region`、溢出才出現「左右滑動查看完整表格」、邊緣陰影）。已知表頭才提升卡片標題／放大主值，多個候選則不挑。漲跌色只套在「漲跌點數／漲跌幅」欄、有明確 `+`／`-` 的值；零用次要色；無正負號不上色。狀態面板依 ui-design 6.2（清單 404／失敗／格式／空、報告 404／失敗／空／錯日期、重試按鈕、載入骨架）。日期用 `#YYYY-MM-DD`，上一頁／下一頁走 hashchange；節目錄只捲動並移焦點，不改網址。`prefers-color-scheme` 跟隨系統。完全沒有外部資源 |
+| marked | 內嵌 4.3.0（取自本機 `telegram-codex-bot/vendor/marked.min.js`，檔頭標示 v4.3.0，MIT）；MIT 授權全文放在 `index.html` 的註解。**未與 CDN 檔逐位元組比對**（本次沒有連外下載），版本只依檔頭 |
+| `VERSION` | 新增，內容 `0.1.0`。頁尾以 `no-store` 讀取；缺檔、空白、HTTP／網路失敗皆顯示「網站版本：無法取得」 |
+| 文件抬頭 | spec（1.1）、design（1.0）、progress（1.1）、review（1.0）補「文件版本」「日期」；ui-design 本來就有，未動 |
+| dry-run 標示 | `reportcheck.header(..., dry_run)`：試跑報告多一行「🧪 試跑報告（dry-run）：未發布、非排程產出；AI 被告知的時點是模擬的…」，`validate(..., dry_run)` 要求有此行；「產生時間」改用實際時間（原本是模擬時鐘的 09:0x，是錯的）。正式報告格式不變 |
+| `prompts/brief.md` | 讀不到時須寫「⚠️ 無法取得」並用白話說明哪項資料、為何沒有；禁用 `REG_MKT` 等欄位名，並附正反範例 |
+| 測試 | `tests/test_brief.py` 61 個（新增 dry-run 標示、實際產生時間、prompt 文案）；新增 `tests/viewer_browser.js`＋`tests/fixtures/`；刪除 `tests/viewer_race.js`（它用假 DOM，已不適用新頁面） |
+
+### 驗證（核對實際輸出）
+
+- `python3 tests/test_brief.py`：61 tests OK。
+- `NODE_PATH=/opt/agent-node-tools/lib/node_modules/@playwright/mcp/node_modules node tests/viewer_browser.js`：146 項斷言通過。用本機 Brave（headless）執行，站台由 route 攔截供應，並固定美東今日以免隨日期變動。涵蓋：320／390／768／1280 × 淺色／深色各自載入，七節齊全、整頁無水平溢出、dry-run 樣本所有表格儲存格文字皆出現在畫面；資料來源收合／展開、網址完整；漲綠跌紅實際顏色（rgb(19,115,75)／rgb(180,35,50)）、價格與零不上色；超寬表橫捲、僅用方向鍵能捲到最後一欄、提示只在溢出時顯示；惡意 HTML／`javascript:`／帳密連結／圖片（不執行、無 img／iframe、只剩合法 https 且帶 `noopener noreferrer`）；所有請求皆同站；頁尾版本與產生時間（取自報告原始行，切換日期、上一頁／下一頁不殘留）；節目錄焦點與網址不變；VERSION 缺失／空白／500／中斷；慢 A／快 B；清單 404／500／壞 JSON／壞 schema／空／全非法日期、報告 404／500／空／錯日期的畫面與日期選單狀態、換日期與手動重試成功；日期提示（找不到、歷史、最新非今日、今日）；觸控目標 ≥44px、焦點外框 3px。
+- 負向控制：把 `.scroll` 改成不橫捲、並讓原始 HTML 不跳脫後，測試在「無水平溢出 768/light」失敗；已還原。
+- 另用 Brave MCP 實際開本機站台看截圖：390 淺色（導言、第 3 節卡片）、390 深色（第 6 節）、320 深色（導言）、768 深色（第 2、3 節表格）、1280 淺色（第 1 節兩欄頭條、第 2 節表格）、640 寬（約 1280 的 200% 縮放）；各尺寸 `scrollWidth ≤ innerWidth`。
+- 色彩對比以公式計算（淺／深各 19 組）：文字、次要文字、連結、主要按鈕、注意／錯誤面板、漲／跌色（在白／次級面板上 5.1–9.2）皆 ≥ 4.5:1；控制項邊界與焦點 ≥ 3:1（最低 3.16）。
+
+### 未驗證／限制
+
+- **200% 縮放**：用 640px 寬視窗等效（768 以下版型），不是瀏覽器的實際縮放；字級放大（只放大文字）沒測。
+- **讀屏**：只檢查標籤與 role 的存在（`role=region`、`aria-label`、`dt／dd`、`aria-live`、`aria-busy`），沒有用實際讀屏軟體。
+- 只測 Brave（Chromium）；Safari／Firefox 未測。`scroll-hint` 陰影僅目視確認寬度正常，沒有逐像素驗證。
+- 與 ui-design 的差異：(1) 期貨與其他表格在電腦一律用表格，沒做「三張等寬卡片並排」（4.4）；(2) 第 1 節頭條是以「清單項目」為單位的卡片，沒處理頭條為表格的情況（走一般表格規則）；(3) 沒有「重新整理清單」專用按鈕以外的自動刷新；(4) 手機標題欄的原表頭以視覺隱藏文字保留給讀屏。
+- 報告 H1 的日期在窄螢幕會在連字號處換行（`2026-11-` ↵ `02`），僅外觀問題。
+- 試跑報告的「產生時間」改用實際時間後，與「今日開盤」等資訊的時點可能看起來矛盾，這是刻意以 🧪 標示說明。
+- `data/`、排程、`bin/` 其餘行為未變；Pages 仍未啟用，真實網站上的檢視器未驗證。
+
+### 待使用者決定：格式收斂提案（ui-design 第 9 節，本次**未做**）
+
+七個 H2 與一般表格單層表頭已能被通用卡片／橫捲保底處理；以下為提案，要做須同步改 prompt、格式檢查與代表性報告驗證，並接受額外 prompt／驗證成本：
+
+1. 經濟數據固定欄位語意（美東時間、台灣時間、事件、預期、前值、實際值）。
+2. 亞太：固定指數、報價、漲跌幅、資料時間；收盤未確認時表頭與內文明示。
+3. 期貨：分列期貨、合約月份、報價、漲跌點數、漲跌幅、資料時間（含時區）。
+4. 美元指數：改為一列標準表格，才有專用大數字卡（目前段落仍有效）。
+5. Mag 7：前一交易日收盤、盤前價格、相對前收漲跌幅、資料時間分欄。
+6. 復盤：各表帶完整表頭。
+
+不做的代價：未來報告若表頭不同，主值不會被放大（但資料完整保留）。請決定要全做、部分做或不做。
