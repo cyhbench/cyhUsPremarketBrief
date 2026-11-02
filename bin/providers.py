@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path.home() / ".local/share/ai-bot-browser"))
@@ -29,23 +30,48 @@ class ProviderFailed(Exception):
 
 
 def run_process(cmd, stdin_text, cwd, timeout):
-    """跑子程序；逾時時殺整個程序群組（含它啟動的 MCP／Brave）。回傳 (rc, stdout)。"""
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                            cwd=cwd, text=True, start_new_session=True)
+    """跑子程序；逾時或輸出超過上限時殺整個程序群組（含它啟動的 MCP／Brave）。回傳 (rc, stdout)。"""
     try:
-        out, _ = proc.communicate(stdin_text, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.communicate()
-        raise ProviderFailed("TIMEOUT")
-    finally:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                cwd=cwd, start_new_session=True)
+    except OSError:  # 執行檔不存在、無執行權限等：視同該供應者失敗，讓上層可備援
+        raise ProviderFailed("LAUNCH_ERROR")
+
+    def kill():
         try:
-            os.killpg(proc.pid, signal.SIGKILL)  # 正常結束後殘留的子程序（MCP、Brave）
+            os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    if len(out) > MAX_OUTPUT:
-        raise ProviderFailed("OUTPUT_TOO_LARGE")
-    return proc.returncode, out
+
+    def feed():
+        try:
+            proc.stdin.write(stdin_text.encode())
+        except OSError:  # 子程序提早關閉 stdin
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    timed_out = threading.Event()
+    timer = threading.Timer(timeout, lambda: (timed_out.set(), kill()))
+    timer.start()
+    threading.Thread(target=feed, daemon=True).start()
+    try:
+        data = proc.stdout.read(MAX_OUTPUT + 1)  # 最多讀上限加 1 byte，不先整份放進記憶體
+        if len(data) > MAX_OUTPUT:
+            kill()
+            raise ProviderFailed("OUTPUT_TOO_LARGE")
+        proc.wait()
+    finally:
+        timer.cancel()
+        kill()  # 正常結束後殘留的子程序（MCP、Brave）
+        proc.stdout.close()
+        proc.wait()
+    if timed_out.is_set():
+        raise ProviderFailed("TIMEOUT")
+    return proc.returncode, data.decode("utf-8", errors="replace")
 
 
 def claude_cmd():
@@ -99,7 +125,12 @@ def run_codex(prompt, timeout):
         rc, _ = run_process(codex_cmd(out_file), prompt, cwd, timeout)
         if rc != 0:
             raise ProviderFailed("EXIT_ERROR")
-        text = out_file.read_text(encoding="utf-8") if out_file.exists() else ""
+        if out_file.exists() and out_file.stat().st_size > MAX_OUTPUT:
+            raise ProviderFailed("OUTPUT_TOO_LARGE")
+        try:
+            text = out_file.read_text(encoding="utf-8") if out_file.exists() else ""
+        except (OSError, UnicodeDecodeError):
+            raise ProviderFailed("PROTOCOL_ERROR")
     if not text.strip():
         raise ProviderFailed("EMPTY")
     return text

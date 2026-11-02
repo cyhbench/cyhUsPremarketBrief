@@ -1,16 +1,21 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import urllib.error
+from unittest import mock
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bin"))
 import briefrun  # noqa: E402
+sys.path.insert(0, str(ROOT / "tests"))
+import permission_canary as canary  # noqa: E402
 import providers  # noqa: E402
 import reportcheck  # noqa: E402
 import tradingcal  # noqa: E402
@@ -147,17 +152,37 @@ class ProviderTests(unittest.TestCase):
                 providers.parse_claude(bad)
             self.assertEqual(cm.exception.code, code)
 
-    def test_commands_have_no_shell_or_upload(self):
+    @staticmethod
+    def codex_settings(cmd):
+        pairs = [tuple(v.split("=", 1)) for f, v in zip(cmd, cmd[1:]) if f == "-c"]
+        keys = [k for k, _ in pairs]
+        assert len(keys) == len(set(keys)), f"-c 設定重複: {sorted(k for k in keys if keys.count(k) > 1)}"
+        return {k: json.loads(v) for k, v in pairs}
+
+    def test_codex_effective_config(self):
+        cfg = self.codex_settings(providers.codex_cmd("/tmp/o"))  # 重複 key 會在這裡失敗
+        self.assertIs(cfg["features.shell_tool"], False)
+        self.assertEqual(cfg["approval_policy"], "never")
+        self.assertEqual(cfg["mcp_servers.brave.enabled_tools"], providers.BRAVE_TOOLS)
+        self.assertEqual(cfg["mcp_servers.brave.disabled_tools"], providers.BRAVE_BLOCKED)
+        self.assertFalse(set(providers.BRAVE_TOOLS) & set(providers.BRAVE_BLOCKED))
+        cmd = providers.codex_cmd("/tmp/o")
+        self.assertEqual(cmd[cmd.index("-s") + 1], "read-only")
+        self.assertEqual(cmd.count("-s"), 1)
+        self.assertIn("--ignore-user-config", cmd)
+        with self.assertRaises(AssertionError):  # 反向控制：尾端追加相反設定要被抓到
+            self.codex_settings(cmd + ["-c", "features.shell_tool=true"])
+
+    def test_claude_effective_tools(self):
         c = providers.claude_cmd()
+        self.assertEqual(c.count("--tools"), 1)
         self.assertEqual(c[c.index("--tools") + 1], "")
+        self.assertEqual(c.count("--allowedTools"), 1)
         allowed = c[c.index("--allowedTools") + 1:]
-        self.assertNotIn("mcp__brave__browser_file_upload", allowed)
-        self.assertIn("mcp__brave__browser_file_upload", c)  # 在 disallowedTools
-        x = " ".join(providers.codex_cmd("/tmp/o"))
-        self.assertIn("features.shell_tool=false", x)
-        self.assertIn("read-only", x)
-        self.assertIn('enabled_tools=["browser_navigate"', x)
-        self.assertEqual(x.count("disabled_tools"), 1)
+        self.assertEqual(allowed, [f"mcp__brave__{t}" for t in providers.BRAVE_TOOLS])
+        disallowed = c[c.index("--disallowedTools") + 1:c.index("--allowedTools")]
+        self.assertIn("mcp__brave__browser_file_upload", disallowed)
+        self.assertFalse(set(allowed) & set(disallowed))
 
     def test_timeout_kills_process_group(self):
         marker = Path(tempfile.mkdtemp()) / "pid"
@@ -188,7 +213,6 @@ class Fx(unittest.TestCase):
             self.git("config", k, v)
         (self.repo / "data").mkdir()
         (self.repo / "prompts").mkdir()
-        (self.repo / "reports").mkdir()
         for rel in ("data/nyse-calendar.json", "prompts/brief.md"):
             (self.repo / rel).write_text((ROOT / rel).read_text())
         self.git("add", "-A")
@@ -197,7 +221,8 @@ class Fx(unittest.TestCase):
         self.now = ny_at(D, 9, 3).astimezone(timezone.utc)
         self.sent, self.calls = [], []
         self.deps = briefrun.Deps(clock=lambda: self.now, claude=self.claude, codex=self.codex,
-                                  notify=lambda m: self.sent.append(m), scan=lambda text: 0)
+                                  notify=lambda m: self.sent.append(m) or True, scan=lambda text: 0,
+                                  pages=lambda d, text, until: True)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -311,6 +336,7 @@ class RunTests(Fx):
         self.assertEqual(self.remote_log().count("brief:"), 1)
 
     def test_report_without_index_entry_stops(self):
+        (self.repo / "reports").mkdir(exist_ok=True)
         (self.repo / "reports/2026-11-03.md").write_text("x")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "stray")
@@ -345,6 +371,7 @@ class RunTests(Fx):
         self.assertEqual(self.run_at()[1].split(":")[0], "PULL_FAILED")  # 已分岔，不自動解
 
     def test_unpushed_local_commit_stops_next_run(self):
+        (self.repo / "reports").mkdir(exist_ok=True)
         (self.repo / "reports/2026-11-02.md").write_text("old")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "brief: 2026-11-02 (claude)")
@@ -393,9 +420,278 @@ class RunTests(Fx):
 
     def test_prompt_does_not_expand_placeholders_from_baseline(self):
         idx = {"schema_version": 1, "reports": [{"date": "2026-11-02", "generated_at": "x", "producer": "claude"}]}
+        (self.repo / "reports").mkdir(exist_ok=True)
         (self.repo / "reports/2026-11-02.md").write_text("## 1. x\n{{REPORT_DATE}}\n")
         p = briefrun.build_prompt(self.repo, CAL, D, self.now, idx)
         self.assertIn("{{REPORT_DATE}}", p.split("<<<前一份報告開始")[1])
+
+
+class FailureExitTests(Fx):
+    """B1–B5、B7：全新 clone、啟動失敗、發布預算、通知回覆、Pages 確認。"""
+
+    def reports_tracked(self):
+        return self.git("ls-tree", "-r", "--name-only", "HEAD", "reports").strip()
+
+    def test_fresh_clone_has_no_reports_dir_and_still_publishes(self):
+        self.assertEqual(self.reports_tracked(), "")
+        self.assertFalse((self.repo / "reports").exists())
+        self.assertEqual(self.run_at()[0], "PUBLISHED")
+        self.assertIn("2026-11-03", self.git("show", "main:reports/index.json", cwd=self.remote))
+        self.assertIn("2026-11-03", self.git("show", "main:reports/2026-11-03.md", cwd=self.remote))
+
+    def test_missing_cli_launches_fail_over_once(self):
+        with mock.patch.object(providers, "claude_cmd", lambda: ["/nonexistent/claude"]):
+            with self.assertRaises(providers.ProviderFailed) as cm:
+                providers.run_claude("p", 5)
+            self.assertEqual(cm.exception.code, "LAUNCH_ERROR")
+            self.deps.claude = providers.run_claude  # 真正的 launcher
+            self.assertEqual(self.run_at()[0], "PUBLISHED")
+        self.assertEqual(self.calls, ["codex"])
+        self.assertEqual(self.sent, [])
+
+    def test_both_cli_missing_single_safe_notice(self):
+        with mock.patch.object(providers, "claude_cmd", lambda: ["/nonexistent/claude"]), \
+                mock.patch.object(providers, "codex_cmd", lambda out: ["/nonexistent/codex"]):
+            self.deps.claude, self.deps.codex = providers.run_claude, providers.run_codex
+            status, detail = self.run_at()
+        self.assertEqual(status, "FAILED")
+        self.assertIn("ALL_PROVIDERS_FAILED", detail)
+        self.assertEqual(len(self.sent), 1)
+        self.assertNotIn("/nonexistent", self.sent[0])
+        self.assertIn("LAUNCH_ERROR", self.sent[0])
+
+    def test_corrupt_index_and_missing_baseline_notify_once(self):
+        (self.repo / "reports").mkdir()
+        (self.repo / "reports/index.json").write_text("{not json")
+        self.git("add", "-A"); self.git("commit", "-q", "-m", "bad"); self.git("push", "-q")
+        status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "INDEX_INVALID"))
+        self.assertEqual(len(self.sent), 1)
+        # 清單列出前一份報告，但檔案不在
+        idx = {"schema_version": 1, "reports": [{"date": "2026-11-02", "generated_at": "x", "producer": "claude"}]}
+        (self.repo / "reports/index.json").write_text(json.dumps(idx))
+        self.git("add", "-A"); self.git("commit", "-q", "-m", "idx"); self.git("push", "-q")
+        status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "BASELINE_UNREADABLE"))
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.calls, [])
+
+    def test_unexpected_exception_uses_failure_exit_without_raw_error(self):
+        def boom(prompt, timeout):
+            raise RuntimeError("secret-looking-detail")
+        self.deps.claude = boom
+        status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "UNEXPECTED_ERROR"))
+        self.assertEqual(len(self.sent), 1)
+        self.assertNotIn("secret-looking-detail", self.sent[0])
+        self.assertIn("RuntimeError", (self.state / "2026-11-03.log").read_text())
+
+    def test_service_outlives_wrapper_and_real_fallback_after_claude_timeout(self):
+        unit = (ROOT / "deploy/cyh-us-premarket-brief.service").read_text()
+        minutes = int(re.search(r"^TimeoutStartSec=(\d+)min", unit, re.M).group(1))
+        dl = briefrun.deadlines(D)
+        # 包裝器最晚結束：Pages 確認 09:30 再留 2 分鐘清理與通知
+        self.assertGreaterEqual(minutes * 60, (dl["pages"] - dl["start"]).total_seconds() + 120)
+        # 真實程序：Claude 卡住到 09:15 被殺 → Codex 仍能完成並發布（以縮短的時窗模擬，不經 systemd）
+        report = Path(self.tmp.name) / "r.md"
+        report.write_text(body())
+        base, t0 = ny_at(D, 9, 14, 56), time.monotonic()
+        self.deps.clock = lambda: (base + timedelta(seconds=time.monotonic() - t0)).astimezone(timezone.utc)
+        self.deps.claude, self.deps.codex = providers.run_claude, providers.run_codex
+        with mock.patch.object(briefrun, "MIN_PROVIDER_SECONDS", 1), \
+                mock.patch.object(providers, "claude_cmd", lambda: ["sh", "-c", "sleep 300"]), \
+                mock.patch.object(providers, "codex_cmd", lambda out: ["sh", "-c", f"cat >/dev/null; cat {report} > {out}"]):
+            t = time.monotonic()
+            status, _ = self.run_at()
+        self.assertEqual(status, "PUBLISHED")
+        self.assertLess(time.monotonic() - t, 30)
+        self.assertIn("brief: 2026-11-03 (codex)", self.remote_log())
+        self.assertIn("claude 失敗：claude:TIMEOUT", (self.state / "2026-11-03.log").read_text())
+
+    def test_no_push_when_commit_finishes_after_0924_30(self):
+        real_git = briefrun.git
+        pushes = []
+
+        def fake_git(repo, *a, timeout=60):
+            if a[0] == "push":
+                pushes.append(timeout)
+            r = real_git(repo, *a, timeout=timeout)
+            if a[0] == "commit":
+                self.now = ny_at(D, 9, 24, 59).astimezone(timezone.utc)
+            return r
+        with mock.patch.object(briefrun, "git", fake_git):
+            status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "PUSH_SKIPPED_LATE"))
+        self.assertEqual(pushes, [])
+        self.assertEqual(len(self.sent), 1)
+
+    def test_git_timeouts_never_exceed_remaining_budget(self):
+        real_git, seen = briefrun.git, {}
+
+        def fake_git(repo, *a, timeout=60):
+            seen[a[0]] = timeout
+            return real_git(repo, *a, timeout=timeout)
+        self.now = ny_at(D, 9, 24, 10).astimezone(timezone.utc)  # 直接呼叫 publish，驗證各步驟 timeout 以距 09:25 為上限
+        self.state.mkdir()
+        with mock.patch.object(briefrun, "git", fake_git):
+            briefrun.publish(self.repo, D, "claude", full(), self.deps, briefrun.deadlines(D), self.state / "x.log")
+        for cmd in ("add", "commit", "push"):
+            self.assertEqual(seen[cmd], 50, cmd)  # 剩 50 秒到 09:25，不得加寬（舊版 push 會是 60 以內加 20）
+
+    def test_push_ok_but_remote_not_at_head_is_unconfirmed(self):
+        real_git = briefrun.git
+
+        def fake_git(repo, *a, timeout=60):
+            if a[0] == "ls-remote":
+                return subprocess.CompletedProcess(a, 0, "0" * 40 + "\trefs/heads/main\n", "")
+            return real_git(repo, *a, timeout=timeout)
+        with mock.patch.object(briefrun, "git", fake_git):
+            status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "PUSH_UNCONFIRMED"))
+        self.assertEqual(len(self.sent), 1)
+
+    def test_pages_not_confirmed_is_reported_as_pushed_not_unpublished(self):
+        self.deps.pages = lambda d, text, until: False
+        status, detail = self.run_at()
+        self.assertEqual((status, detail.split(":")[0]), ("FAILED", "PAGES_NOT_CONFIRMED"))
+        self.assertIn("brief: 2026-11-03", self.remote_log())  # 確實已推
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("不是未發布", self.sent[0])
+        log = (self.state / "2026-11-03.log").read_text()
+        self.assertIn("PUSH_CONFIRMED", log)
+        self.assertNotIn("PAGES_VISIBLE", log)
+        self.deps.pages = None  # 未設定確認器也不能當成功
+        self.assertEqual(self.run_at()[0], "ALREADY_PUBLISHED")
+
+    def test_notify_false_is_logged_once_without_retry(self):
+        calls = []
+        self.deps.notify = lambda m: calls.append(m) and False
+        self.deps.claude = self.deps.codex = lambda p, t: (_ for _ in ()).throw(providers.ProviderFailed("EXIT_ERROR"))
+        self.assertEqual(self.run_at()[0], "FAILED")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("NOTIFY_FAILED API_NOT_OK", (self.state / "2026-11-03.log").read_text())
+
+
+class FakeResp:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self.payload if isinstance(self.payload, bytes) else self.payload.encode()
+
+
+class SenderAndPagesTests(unittest.TestCase):
+    def post(self, payload=None, exc=None):
+        def opener(req, timeout):
+            self.assertEqual(timeout, 10)
+            if exc:
+                raise exc
+            return FakeResp(payload)
+        return briefrun.telegram_post("TOKEN", 1, "hi", urlopen=opener)
+
+    def test_telegram_post_ok_notok_timeout(self):
+        self.assertTrue(self.post('{"ok": true}'))
+        self.assertFalse(self.post('{"ok": false, "description": "x"}'))
+        self.assertFalse(self.post('{}'))
+        with self.assertRaises(TimeoutError):
+            self.post(exc=TimeoutError())
+
+    def pages(self, serve, until_s=40):
+        d, now = D, [ny_at(D, 9, 25)]
+        sleeps = []
+
+        def opener(req, timeout):
+            r = serve(req.full_url.split("?")[0].replace(briefrun.PAGES_URL, ""), len(sleeps))
+            if r is None:
+                raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
+            return FakeResp(r)
+
+        def sleep(n):
+            sleeps.append(n)
+            now[0] += timedelta(seconds=n)
+        ok = briefrun.pages_visible(d, "REPORT", now[0] + timedelta(seconds=until_s), urlopen=opener,
+                                    clock=lambda: now[0], sleep=sleep)
+        return ok, len(sleeps)
+
+    def test_pages_visible_when_listed_and_content_equal(self):
+        idx = json.dumps({"reports": [{"date": "2026-11-03"}]})
+        ok, n = self.pages(lambda p, i: idx if p.endswith("json") else "REPORT")
+        self.assertEqual((ok, n), (True, 0))
+
+    def test_pages_waits_for_deploy_then_succeeds(self):
+        idx = json.dumps({"reports": [{"date": "2026-11-03"}]})
+        ok, n = self.pages(lambda p, i: None if i < 2 else (idx if p.endswith("json") else "REPORT"))
+        self.assertEqual((ok, n), (True, 2))
+
+    def test_pages_stale_or_missing_or_mismatched_content_is_false(self):
+        old = json.dumps({"reports": [{"date": "2026-11-02"}]})
+        new = json.dumps({"reports": [{"date": "2026-11-03"}]})
+        self.assertFalse(self.pages(lambda p, i: old if p.endswith("json") else "REPORT")[0])  # 過期清單
+        self.assertFalse(self.pages(lambda p, i: None)[0])  # 404（Pages 未開）
+        self.assertFalse(self.pages(lambda p, i: new if p.endswith("json") else "OLD")[0])  # 內容不符
+        self.assertFalse(self.pages(lambda p, i: "garbage")[0])
+
+
+class OutputLimitTests(unittest.TestCase):
+    def test_runaway_stdout_is_capped_without_buffering_all(self):
+        t = time.monotonic()
+        with self.assertRaises(providers.ProviderFailed) as cm:
+            providers.run_process(["yes"], "", "/tmp", 30)
+        self.assertEqual(cm.exception.code, "OUTPUT_TOO_LARGE")
+        self.assertLess(time.monotonic() - t, 10)
+
+    def test_oversize_codex_file_rejected_before_reading(self):
+        def fake_cmd(out):
+            return ["sh", "-c", f"head -c {providers.MAX_OUTPUT + 1} /dev/zero | tr '\\0' a > {out}"]
+        with mock.patch.object(providers, "codex_cmd", fake_cmd):
+            with self.assertRaises(providers.ProviderFailed) as cm:
+                providers.run_codex("p", 10)
+        self.assertEqual(cm.exception.code, "OUTPUT_TOO_LARGE")
+
+    def test_exact_limit_is_accepted(self):
+        rc, out = providers.run_process(["sh", "-c", f"head -c {providers.MAX_OUTPUT} /dev/zero | tr '\\0' a"], "", "/tmp", 10)
+        self.assertEqual((rc, len(out)), (0, providers.MAX_OUTPUT))
+
+
+class CanaryJudgeTests(unittest.TestCase):
+    """permission_canary 的判準：用合成事件串流驗證「該過的過、該擋的擋」，不耗額度。"""
+
+    @staticmethod
+    def claude_stream(tools=None, snapshot_denied=True, nav_ok=True, extra=()):
+        tools = sorted(canary.ALLOWED) if tools is None else tools
+        ev = [{"type": "system", "subtype": "init", "tools": tools}]
+        steps = [("browser_snapshot", not snapshot_denied, "Error: File access denied: /x is outside allowed roots. Allowed roots: /t"),
+                 ("browser_navigate", nav_ok, "ok")] + list(extra)
+        for i, (name, ok, text) in enumerate(steps):
+            ev.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": f"t{i}", "name": f"mcp__brave__{name}", "input": {}}]}})
+            ev.append({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": f"t{i}", "is_error": not ok, "content": text}]}})
+        return "\n".join(json.dumps(e) for e in ev)
+
+    def test_claude_pass_and_each_failure_is_caught(self):
+        self.assertEqual(canary.evaluate("claude", self.claude_stream())[0], [])
+        self.assertTrue(canary.evaluate("claude", self.claude_stream(tools=sorted(canary.ALLOWED) + ["Bash"]))[0])
+        self.assertTrue(canary.evaluate("claude", self.claude_stream(snapshot_denied=False))[0])  # 工具沒擋
+        self.assertTrue(canary.evaluate("claude", self.claude_stream(nav_ok=False))[0])  # 報價沒取到
+        self.assertTrue(canary.evaluate("claude", self.claude_stream(extra=[("browser_file_upload", True, "done")]))[0])
+        self.assertTrue(canary.evaluate("claude", self.claude_stream(), canary_exists=True)[0])
+        self.assertTrue(canary.evaluate("claude", "")[0])  # 沒有任何事件（模型沒嘗試／provider 失敗）不得算通過
+
+    def test_codex_shell_item_fails(self):
+        def item(it):
+            return json.dumps({"type": "item.completed", "item": it})
+        snap = {"type": "mcp_tool_call", "tool": "browser_snapshot", "status": "failed",
+                "result": {"content": [{"type": "text", "text": "File access denied: outside allowed roots"}]}}
+        nav = {"type": "mcp_tool_call", "tool": "browser_navigate", "status": "completed", "result": {"content": []}}
+        good = "\n".join([item(snap), item(nav)])
+        self.assertEqual(canary.evaluate("codex", good)[0], [])
+        self.assertTrue(canary.evaluate("codex", good + "\n" + item({"type": "command_execution"}))[0])
+        self.assertTrue(canary.evaluate("codex", item(nav))[0])  # 沒嘗試越界寫入 = 未驗證
 
 
 class NotifyAndScanTests(unittest.TestCase):

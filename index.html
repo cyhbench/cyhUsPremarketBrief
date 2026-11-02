@@ -92,13 +92,20 @@
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
   }
 
+  let seq = 0;  // 只有最後一次選擇的回應可以寫入畫面
+  function bad(message) {  // 單份報告失敗：只換本文，選單保持可用，可改看其他日期
+    $('report').textContent = message;
+    show('');
+  }
   async function loadReport(date, isLatest) {
+    const mine = ++seq;
     $('report').textContent = '載入中…';
     let res;
-    try { res = await getText('reports/' + date + '.md'); } catch (e) { return fail('讀取報告失敗，請稍後重試。'); }
-    if (res.status === 404) return fail('報告更新中，請稍後重試。');
-    if (!res.text) return fail('讀取報告失敗（HTTP ' + res.status + '）。');
-    if (res.text.split('\n', 1)[0].indexOf(date) === -1) return fail('報告內容與日期不符，請稍後重試。');
+    try { res = await getText('reports/' + date + '.md'); } catch (e) { return mine === seq && bad('讀取報告失敗，請稍後重試。'); }
+    if (mine !== seq) return;
+    if (res.status === 404) return bad('報告更新中，請稍後重試。');
+    if (!res.text) return bad('讀取報告失敗（HTTP ' + res.status + '）。');
+    if (res.text.split('\n', 1)[0].indexOf(date) === -1) return bad('報告內容與日期不符，請稍後重試。');
     $('report').innerHTML = marked.parse(res.text);
     const today = nyToday();
     show(date !== today ? '目前顯示的是 ' + date + ' 的快報（美東今日為 ' + today + '）' + (isLatest ? '，今日報告尚未發布或未產生。' : '。') : '', true);

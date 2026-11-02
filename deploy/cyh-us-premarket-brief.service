@@ -5,6 +5,7 @@ Description=US premarket brief (cyhUsPremarketBrief)
 Type=oneshot
 WorkingDirectory=%h/projects/cyhUsPremarketBrief
 ExecStart=%h/projects/cyhUsPremarketBrief/bin/run-brief
-# AI 與 Brave 逾時由包裝器自己管；這裡只是最後防線。
-TimeoutStartSec=15min
+# AI 與 Brave 逾時由包裝器自己管；這裡只是最後防線，必須大於包裝器自己的最晚結束時間
+# （09:00 起，Pages 確認到 09:30，再加清理與通知），否則備援與失敗通知會被一起砍掉。
+TimeoutStartSec=35min
 Environment=DISPLAY=:0

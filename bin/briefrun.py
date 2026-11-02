@@ -23,6 +23,8 @@ STATE_DIR = Path.home() / ".local/state/cyhUsPremarketBrief"
 CONFIG = Path.home() / ".config/cyhUsPremarketBrief/config.json"
 BOT_DIR = Path.home() / "projects/telegram-codex-bot"
 GIT_TIMEOUT = 60
+PAGES_URL = "https://cyhbench.github.io/cyhUsPremarketBrief/"
+PAGES_POLL_SECONDS = 15
 MIN_PROVIDER_SECONDS = 60
 
 
@@ -41,12 +43,14 @@ class Deps:
     codex: callable = providers.run_codex
     notify: callable = None
     scan: callable = None
+    pages: callable = None  # (d, 報告全文, 期限) -> 網站是否已顯示該報告；None 視為無法確認
 
 
 # ---------- 時間 ----------
 def deadlines(d):
     return {"start": ny_at(d, 9, 0), "claude": ny_at(d, 9, 15), "codex": ny_at(d, 9, 24),
-            "publish": ny_at(d, 9, 24, 30), "hard": ny_at(d, 9, 25)}
+            "publish": ny_at(d, 9, 24, 30), "hard": ny_at(d, 9, 25),
+            "pages": ny_at(d, 9, 30)}
 
 
 def simulated_clock(d):
@@ -76,8 +80,12 @@ def load_index(repo):
     p = repo / "reports/index.json"
     if not p.exists():
         return {"schema_version": 1, "reports": []}
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if data.get("schema_version") != 1 or not isinstance(data.get("reports"), list):
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Failure("INDEX_INVALID", "reports/index.json 無法讀取或不是合法 JSON")
+    if not isinstance(data, dict) or data.get("schema_version") != 1 or not isinstance(data.get("reports"), list) \
+            or not all(isinstance(e, dict) and isinstance(e.get("date"), str) for e in data["reports"]):
         raise Failure("INDEX_INVALID", "reports/index.json 格式不符")
     return data
 
@@ -111,7 +119,10 @@ def build_prompt(repo, cal, d, now, index):
     base = next((e for e in index["reports"] if e["date"] < d.isoformat()), None)
     body = "（無前一份報告）"
     if base:
-        text = (repo / f"reports/{base['date']}.md").read_text(encoding="utf-8")
+        try:
+            text = (repo / f"reports/{base['date']}.md").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            raise Failure("BASELINE_UNREADABLE", f"清單列有 {base['date']} 但前一份報告檔無法讀取")
         body = text[text.find("## 1."):] if "## 1." in text else text
         bd = date.fromisoformat(base["date"])
         if prev and bd != prev:
@@ -142,16 +153,44 @@ def build_prompt(repo, cal, d, now, index):
 
 
 # ---------- 通知與秘密掃描 ----------
+def telegram_post(token, chat_id, text, urlopen=urllib.request.urlopen):
+    """呼叫 Bot API sendMessage；只有 HTTP 成功且回覆 ok:true 才回 True。只試一次，逾時／連線錯誤由呼叫端接。"""
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+    with urlopen(req, timeout=10) as resp:
+        return json.load(resp).get("ok") is True
+
+
 def telegram_notify(text):
-    """送一則訊息給設定檔中的 chat；成功回 True。只試一次。"""
     sys.path.insert(0, str(BOT_DIR))
     import secret_guard
     token = secret_guard.secret("TELEGRAM_CLAUDE_BOT_TOKEN")
     chat_id = json.loads(CONFIG.read_text())["chat_id"]
-    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.load(resp).get("ok") is True
+    return telegram_post(token, chat_id, text)
+
+
+def pages_visible(d, full, until, base=PAGES_URL, urlopen=urllib.request.urlopen,
+                  clock=lambda: datetime.now(timezone.utc), sleep=time.sleep):
+    """輪詢 Pages 直到清單含當日且報告本文等於這次產物；到 until 仍不符回 False。"""
+    def fetch(path):
+        # 查詢字串避開 CDN／瀏覽器快取；失敗（404、連線）一律當作尚未可見
+        try:
+            with urlopen(urllib.request.Request(f"{base}{path}?t={int(time.time())}",
+                                                headers={"Cache-Control": "no-cache"}), timeout=10) as r:
+                return r.read().decode("utf-8")
+        except (OSError, ValueError):
+            return None
+    while True:
+        idx = fetch("reports/index.json")
+        try:
+            listed = idx is not None and any(e.get("date") == d.isoformat() for e in json.loads(idx)["reports"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            listed = False
+        if listed and fetch(f"reports/{d.isoformat()}.md") == full:
+            return True
+        if clock() + timedelta(seconds=PAGES_POLL_SECONDS) > until:
+            return False
+        sleep(PAGES_POLL_SECONDS)
 
 
 def secret_hits(text):
@@ -194,29 +233,43 @@ def generate(prompt, d, deps, dl, log, early):
 
 
 def publish(repo, d, producer, full, deps, dl, log):
-    if deps.clock() >= dl["publish"]:
-        raise Failure("DEADLINE_EXCEEDED", "已超過發布期限（09:24:30），不發布")
+    def left():  # 距 09:25 的秒數；每個外部步驟的 timeout 都以此為上限，不另外加寬
+        return max(1, min(GIT_TIMEOUT, int((dl["hard"] - deps.clock()).total_seconds())))
+
+    def before_step(code, message):
+        if deps.clock() >= dl["publish"]:
+            raise Failure(code, message)
+
+    before_step("DEADLINE_EXCEEDED", "已超過發布期限（09:24:30），不發布")
     if deps.scan is None or deps.scan(full):
         raise Failure("SECRET_SCAN", "秘密掃描發現問題或掃描器不可用，不發布")
-    report = repo / f"reports/{d.isoformat()}.md"
-    with open(report, "x", encoding="utf-8") as f:  # 不覆寫
+    rel = f"reports/{d.isoformat()}.md"
+    (repo / "reports").mkdir(exist_ok=True)  # 全新 clone 沒有此目錄（git 不追蹤空目錄）
+    with open(repo / rel, "x", encoding="utf-8") as f:  # 不覆寫
         f.write(full)
-    now = deps.clock()
-    write_atomic(repo / "reports/index.json", json.dumps(new_index(load_index(repo), d, producer, now), ensure_ascii=False, indent=2) + "\n")
-    git_ok(repo, "add", "--", f"reports/{d.isoformat()}.md", "reports/index.json", code="GIT_ADD", message="git add 失敗")
-    staged = sorted(git_ok(repo, "diff", "--cached", "--name-only", code="GIT_DIFF", message="git diff 失敗").split())
-    if staged != sorted([f"reports/{d.isoformat()}.md", "reports/index.json"]):
+    write_atomic(repo / "reports/index.json", json.dumps(new_index(load_index(repo), d, producer, deps.clock()), ensure_ascii=False, indent=2) + "\n")
+    before_step("DEADLINE_EXCEEDED", "已超過 09:24:30，不 add／commit")
+    git_ok(repo, "add", "--", rel, "reports/index.json", code="GIT_ADD", message="git add 失敗", timeout=left())
+    staged = sorted(git_ok(repo, "diff", "--cached", "--name-only", code="GIT_DIFF", message="git diff 失敗", timeout=left()).split())
+    if staged != sorted([rel, "reports/index.json"]):
         raise Failure("UNEXPECTED_STAGED", "暫存區含預期外的檔案")
-    if deps.clock() >= dl["hard"]:
-        raise Failure("DEADLINE_EXCEEDED", "已超過 09:25，不 commit")
-    git_ok(repo, "commit", "-q", "-m", f"brief: {d.isoformat()} ({producer})", code="GIT_COMMIT", message="git commit 失敗")
+    before_step("DEADLINE_EXCEEDED", "已超過 09:24:30，不 commit")
+    git_ok(repo, "commit", "-q", "-m", f"brief: {d.isoformat()} ({producer})", code="GIT_COMMIT", message="git commit 失敗", timeout=left())
     log_line(log, "已 commit（本機）")
-    if deps.clock() >= dl["hard"]:
-        raise Failure("PUSH_SKIPPED_LATE", "本機已有 commit，超過 09:25 未推送")
-    r = git(repo, "push", "-q", timeout=max(5, min(60, int((dl["hard"] - deps.clock()).total_seconds()) + 20)))
+    before_step("PUSH_SKIPPED_LATE", "本機已有 commit，超過 09:24:30 未推送")
+    r = git(repo, "push", "-q", timeout=left())
     if r.returncode != 0:
         raise Failure("PUSH_FAILED", "本機已有 commit，未確認推送成功")
+    # push 回 0 還要確認遠端分支真的指到本機 HEAD
+    head = git_ok(repo, "rev-parse", "HEAD", code="GIT_STATUS", message="無法讀取 HEAD").strip()
+    branch = git_ok(repo, "rev-parse", "--abbrev-ref", "HEAD", code="GIT_STATUS", message="無法讀取分支").strip()
+    remote = git(repo, "ls-remote", "origin", f"refs/heads/{branch}", timeout=30)
+    if remote.returncode != 0 or remote.stdout.split()[:1] != [head]:
+        raise Failure("PUSH_UNCONFIRMED", "push 回報成功但遠端未確認含本次 commit，發布狀態待確認")
     log_line(log, "PUSH_CONFIRMED")
+    if deps.pages is None or not deps.pages(d, full, dl["pages"]):
+        raise Failure("PAGES_NOT_CONFIRMED", "已推送到 GitHub，但到 09:30 仍未確認網站顯示當日報告（不是未發布）")
+    log_line(log, "PAGES_VISIBLE")
 
 
 def run(repo, state_dir, deps, report_date=None, dry_run=False):
@@ -230,15 +283,22 @@ def run(repo, state_dir, deps, report_date=None, dry_run=False):
     except BlockingIOError:
         return "SKIPPED_LOCKED", "另一個執行中"
     try:
-        return _run_locked(repo, state_dir, deps, d, dry_run, log)
-    except Failure as e:
-        log_line(log, f"FAILED {e.code} {e.message}")
+        try:
+            return _run_locked(repo, state_dir, deps, d, dry_run, log)
+        except Failure as e:
+            failure = e
+        except Exception as e:  # 最後防線：任何未預期例外也走同一個失敗出口，通知不含原始錯誤
+            log_line(log, f"UNEXPECTED {type(e).__name__}: {e}")
+            failure = Failure("UNEXPECTED_ERROR", "內部錯誤，詳見記錄")
+        log_line(log, f"FAILED {failure.code} {failure.message}")
         if not dry_run and deps.notify:
             try:
-                deps.notify(f"⚠️ 美股盤前快報 {d.isoformat()} 未發布：{e.message}（{e.code}）\n記錄：{log}")
+                sent, why = deps.notify(f"⚠️ 美股盤前快報 {d.isoformat()} 發布異常：{failure.message}（{failure.code}）\n記錄：{log}"), "API_NOT_OK"
             except Exception as ne:  # 通知失敗只記錄，不重試、不遞迴通知
-                log_line(log, f"NOTIFY_FAILED {type(ne).__name__}")
-        return "FAILED", f"{e.code}: {e.message}"
+                sent, why = False, type(ne).__name__
+            if not sent:
+                log_line(log, f"NOTIFY_FAILED {why}")
+        return "FAILED", f"{failure.code}: {failure.message}"
     finally:
         lock.close()
 
@@ -292,7 +352,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.date and not args.dry_run:
         ap.error("--date 只能與 --dry-run 併用")
-    deps = Deps(notify=telegram_notify, scan=secret_hits)
+    deps = Deps(notify=telegram_notify, scan=secret_hits, pages=pages_visible)
     if args.dry_run:  # 試跑一律從該日 09:00 ET 起算，不受實際執行時間影響
         args.date = args.date or deps.clock().astimezone(NY).date()
         deps.clock = simulated_clock(args.date)
