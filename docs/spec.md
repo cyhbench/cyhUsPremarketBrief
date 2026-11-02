@@ -109,13 +109,13 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 
 | # | 項目 | 主要來源 | 備援 | 抓不到時 |
 |---|------|----------|------|----------|
-| 1 | 重要美國市場頭條 | CNBC Top News RSS `search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114`（已驗證，30 則，最新為當日）；MarketWatch Top Stories RSS `feeds.content.dowjones.io/public/rss/mw_topstories`（已驗證，10 則） | CNBC Finance RSS `id=20910258`（已驗證可讀，但最新一則是 10/30，更新慢） | 全部失敗：`⚠️ 今日新聞來源無法取得`。不足 5 則就照實列，不湊數 |
+| 1 | 重要美國市場頭條 | CNBC Top News RSS `search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114`（已驗證，30 則，最新為當日）；MarketWatch Top Stories RSS `feeds.content.dowjones.io/public/rss/mw_topstories`（已驗證，10 則；週末多為個人理財文章，要依 4.3 篩選） | CNBC Finance RSS `id=20910258`（已驗證可讀，但最新一則是 10/30，更新慢） | 全部失敗：`⚠️ 今日新聞來源無法取得`。不足 5 則就照實列，不湊數 |
 | 2 | 當日美國經濟數據 | 事件清單：ForexFactory `nfs.faireconomy.media/ff_calendar_thisweek.xml`（已驗證）。實際值：ForexFactory 日曆網頁 `www.forexfactory.com/calendar?day=<mmmdd.yyyy>`（已驗證可讀，有 Actual 欄） | 無 | XML 失敗：`⚠️ 今日經濟日曆無法取得`，不從新聞反推。XML 成功但當天無符合事件：`今日無重大美國經濟數據公布`。實際值讀不到：照列預期與前值，標 `實際值未取得` |
 | 3 | 亞太早盤指數 | 4.1 報價：`.N225`、`.KS11`、`.TWII`、`.HSI`、`.SSEC`、`.AXJO`（已驗證） | 個別報價頁 | 個別標 `⚠️ 無法取得`。當地休市照報最近收盤並註明日期 |
 | 4 | 主要期貨指數 | 4.1 報價：`@SP.1`、`@ND.1`、`@DJ.1`（已驗證，名稱含合約月份） | 個別報價頁 | 個別標 `⚠️ 無法取得` |
 | 5 | 美元指數 | 4.1 報價：`.DXY`（已驗證） | 個別報價頁 | `⚠️ 無法取得` |
 | 6 | 重點美股（Mag 7） | 4.1 報價：`AAPL`、`MSFT`、`GOOGL`、`AMZN`、`NVDA`、`META`、`TSLA`（已驗證） | 個別報價頁 | 個別標 `⚠️ 無法取得`；沒有盤前報價時列前一日收盤並標 `無盤前報價` |
-| 7 | 前一交易日復盤 | 最新一份已存報告（腳本放進提示詞）＋ 4.1 報價：`.SPX`、`.IXIC`、`.DJI`（已驗證：開盤前回傳的即前一交易日收盤與漲跌）＋ 第 2 項的日曆網頁（前一天的實際值） | 無 | 沒有前一份報告：`無前一份報告，略過復盤`。前一份報告不是上一個交易日的：照做，並註明報告日期與中間缺了哪幾天 |
+| 7 | 前一交易日復盤 | 最新一份已存報告（腳本放進提示詞）＋ 4.1 報價：`.SPX`、`.IXIC`、`.DJI`（已驗證：開盤前回傳的即前一交易日收盤與漲跌）＋ 第 2 項的日曆網頁（前一天的實際值） | 無 | 沒有前一份報告：照列三大指數收盤與前一交易日的數據實際值，對照部分寫 `無前一份報告，略過對照`。前一份報告不是上一個交易日的：照做，並註明報告日期與中間缺了哪幾天 |
 
 ### 4.3 各項細則
 
@@ -123,13 +123,13 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 
 **2. 經濟數據**：
 
-- 篩選：`country = USD`、`impact` 為 `High` 或 `Medium`、日期為當天美東日期。
+- 篩選：`country = USD`、`impact` 為 `High` 或 `Medium`；XML 的日期與時間是 UTC，**先換成美東時間再判斷是不是當天**。時間不是 `h:mmam/pm` 格式的事件（例如全天事件）保留原文，不換算。
 - XML 實測格式（已驗證）：
   - 日期是 `MM-DD-YYYY`。
   - 時間是 **UTC**（ISM Manufacturing PMI 標 `3:00pm`＝美東 10:00 EST）。
   - **沒有實際值欄位**，所以實際值改從日曆網頁取。
   - `ff_calendar_nextweek.xml` 回 404；只在交易日當天執行，讀 thisweek 即可。
-- 日曆網頁的時間跟著**瀏覽器時區**顯示（已驗證：TG VM 的 Brave 顯示台灣時間，Chicago PMI 顯示 `9:45pm`）；同一時間的連續事件只有第一列有時間。
+- 日曆網頁的時間跟著**瀏覽器時區**顯示（已驗證：TG VM 的 Brave 顯示台灣時間，Chicago PMI 顯示 `9:45pm`）；同一時間的連續事件只有第一列有時間。網頁的「一天」也照瀏覽器時區切：美東一整天跨兩個台灣日期（EST 期間美東 11:00 以後的事件落在台灣的隔天），查前一交易日的實際值時兩天都要看。
 - 每項列：美東與台灣時間、名稱、預期、前值；已公布的加實際值。
 - 名稱：保留 ForexFactory 原文，後面加中文名稱；中文名稱只用 `prompts/brief.md` 的對照表，對照表依 ForexFactory 現行事件名稱建立，對照不到就只列英文。
 
@@ -242,7 +242,7 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 11. 上線後連續 3 個交易日，每天抽 5 個數字（期貨、美元指數、亞太指數、Mag 7 各至少一個），和 4.1 報價網址在報告記載資料時間附近的值一致。
 12. 同期間經濟數據清單與 ForexFactory 當天 USD High／Medium 事件一致，美東與台灣時間各核對一次換算。
 13. 測試執行時把某個來源網址改成不存在的網址，該項顯示 `⚠️ 無法取得`，其他項照常，資料來源清單不列該來源。
-14. 在沒有前一份報告的測試目錄執行一次，復盤段落顯示「無前一份報告，略過復盤」。
+14. 在沒有前一份報告的測試目錄執行一次，復盤段落仍列三大指數收盤，並顯示「無前一份報告，略過對照」。
 
 ### 6.4 排程、通知與時間
 
