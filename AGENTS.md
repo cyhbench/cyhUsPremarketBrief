@@ -25,3 +25,4 @@
 
 - repo 是 public：不放秘密、token 或 chat id。
 - 可以 commit、push 到 main；不 force push、不改 repo 設定、不刪分支。
+- 判斷限制（網路、權限、檔案存取、可用工具）時，寫明是在哪個環境測到的：現在執行的沙箱或互動 shell 不等於正式上線環境（systemd 排程、正式部署 clone）。一處的結果不直接套到另一處；沒在正式環境實測就標「未驗證」，不寫成阻擋或已通過。
