@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "title": "美股盤前快報",
+  "state": "blocked",
+  "step": "修正",
+  "owner": "使用者",
+  "updated": "2026-11-03T00:38+08:00",
+  "note": "待決定格式收斂提案與上線前事項（見 docs/progress.md）",
+  "steps": ["規格", "設計", "實作", "Review", "修正", "驗收"]
+}
