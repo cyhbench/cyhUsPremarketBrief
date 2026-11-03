@@ -11,6 +11,8 @@ WEEKDAYS = "一二三四五六日"
 MAX_BYTES = 128 * 1024
 PLACEHOLDERS = re.compile(r"X\.XX|HH:MM|\bXX\b|YYYY|\[(?:待填|TODO|TBD|\.\.\.|…)\]|\{\{.*?\}\}", re.I)
 CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# AI 自言自語／查證過程的句子（使用者規定不得出現）；只列明確的字樣，避免誤殺正常內容
+SELF_TALK = re.compile(r"我(?:另外|有)?(?:確認|開了|開啟|沒有(?:讀到|逐則|查到)|讀到)|更正上表|不，|所以(?:本節)?未採用|不在中文對照表")
 LINK = re.compile(r"https://[^\s)>\]]+")
 REQUIRED_ITEMS = {
     "## 3. 亞太股市": ["日經", "KOSPI", "加權", "恆生", "上證", "ASX"],
@@ -99,6 +101,8 @@ def validate(text, report_date, producer, early_close=None, dry_run=False):
         raise ReportInvalid("標題層級不符")
     if PLACEHOLDERS.search(text):
         raise ReportInvalid("含未替換的範本字樣")
+    if SELF_TALK.search(text):
+        raise ReportInvalid("含查證過程或自言自語的說明")
     if not LINK.search(sections["## 資料來源"]):
         raise ReportInvalid("資料來源沒有 https 連結")
     return True

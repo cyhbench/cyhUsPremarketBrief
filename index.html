@@ -188,7 +188,7 @@
   const SECTION_IDS = ['頭條', '經濟數據', '亞太', '期貨', '美元', 'Mag 7', '復盤'];
   const TITLE_HEADS = ['摘要', '頭條', '事件', '指數', '公司', '期貨', '期貨／合約月份', '指標'];
   const MAIN_HEADS = ['報價', '收盤', '收盤值', '來源所列當日值'];
-  const CHANGE_HEADS = ['漲跌點數', '漲跌幅'];
+  const CHANGE_HEAD = /漲跌/;  // 漲跌、漲跌點數、漲跌幅、盤前漲跌…；prompt 規定漲跌欄表頭必含「漲跌」
 
   function validDate(s) {
     if (typeof s !== 'string' || !DATE_RE.test(s)) return false;
@@ -282,7 +282,7 @@
   // ---------- 表格 → 卡片（手機）／表格（電腦）----------
   function cellsOf(tr) { return Array.prototype.slice.call(tr.children); }
   function changeClass(text) {
-    const m = /^([+\-−])?(\d[\d,]*(?:\.\d+)?)%?$/.exec(text.trim());
+    const m = /^([+\-−])?(\d[\d,]*(?:\.\d+)?)%?(?:（[^）]*）)?$/.exec(text.trim());  // 允許「+38.75（+0.51%）」
     if (!m) return '';
     const n = parseFloat(m[2].replace(/,/g, ''));
     if (n === 0) return 'flat';
@@ -290,7 +290,7 @@
     return m[1] === '+' ? 'up' : 'down';
   }
   function colorChanges(table, heads) {
-    const idx = heads.map((t, i) => CHANGE_HEADS.indexOf(t) >= 0 ? i : -1).filter((i) => i >= 0);
+    const idx = heads.map((t, i) => CHANGE_HEAD.test(t) ? i : -1).filter((i) => i >= 0);
     if (!idx.length) return;
     Array.prototype.forEach.call(table.tBodies, (tb) => Array.prototype.forEach.call(tb.rows, (tr) => {
       idx.forEach((i) => { const c = tr.cells[i]; const k = c && changeClass(c.textContent); if (k) c.classList.add(k); });
@@ -319,7 +319,7 @@
         f.appendChild(h('dt', null, heads[i]));
         const dd = h('dd');
         Array.prototype.forEach.call(c.childNodes, (n) => dd.appendChild(n.cloneNode(true)));
-        const k = CHANGE_HEADS.indexOf(heads[i]) >= 0 ? changeClass(c.textContent) : '';
+        const k = CHANGE_HEAD.test(heads[i]) ? changeClass(c.textContent) : '';
         if (k) dd.className = k;
         f.appendChild(dd); dl.appendChild(f);
       });

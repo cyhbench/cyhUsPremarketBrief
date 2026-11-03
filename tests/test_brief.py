@@ -135,6 +135,19 @@ class ReportTests(unittest.TestCase):
         self.bad(good + "字" * 60000)
         self.bad(good.replace("## 5. 美元指數", "```\n## 5. 美元指數\n```\n## 5. 美元指數\n```"))  # fence 內假標題 + 結構破壞
 
+    def test_rejects_self_talk(self):
+        good = full()
+        for phrase in ["我確認了發布時間", "10:00 ET／22:00? 不，台灣 23:00", "> 更正上表時間", "所以本節未採用",
+                       "這個事件名稱不在中文對照表內，所以只列英文", "我沒有讀到相關新聞"]:
+            self.bad(good.replace("DXY 101.8", "DXY 101.8 " + phrase))
+
+    def test_committed_reports_and_prompt_have_no_self_talk(self):
+        for p in sorted((ROOT / "reports").glob("*.md")):
+            self.assertIsNone(reportcheck.SELF_TALK.search(p.read_text(encoding="utf-8")), p.name)
+        prompt = (ROOT / "prompts/brief.md").read_text(encoding="utf-8")
+        self.assertIn("不寫你的查證過程或自言自語", prompt)
+        self.assertIn("表頭一律含「漲跌」", prompt)
+
     def test_fence_heading_not_counted(self):
         text = full().replace("DXY 101.8", "```\n## 3. 亞太股市\n```\nDXY 101.8")
         self.assertTrue(reportcheck.validate(text, D, "claude"))

@@ -280,6 +280,8 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 - 舊 skill 的任何內容（來源網址、資料格式、時區、休市表、篩選規則、中文對照表）都要重新實測或重新定義才能用，不得直接沿用。本規格第 4 節的來源皆已重測；Business Insider、Finviz、Reuters 不再使用（Reuters RSS 網域已失效，Finviz 表格無資料列）。
 - repo：`cyhbench/cyhUsPremarketBrief`（public，2026-11-02 04:30 UTC 建立，內含一個 README 初始 commit），網址 `https://cyhbench.github.io/cyhUsPremarketBrief/`。先前誤建的 `cyhUsPremarketBrief-` 由使用者自行刪除。
 - 漲跌顏色採用 B：美國習慣，漲綠跌紅（2026-11-02 使用者回覆，選自 ui-design 第 3.3 節 A／B）。全站一致；一律保留 `+`／`-` 或原有文字，不讓顏色成為唯一線索。
+- 漲跌欄上色（2026-11-03 使用者回報 11/02 報告全沒上色）：網頁以表頭含「漲跌」判定漲跌欄（「漲跌」「漲跌點數」「漲跌幅」「盤前漲跌」皆可），數值帶 `+`／`-`，含「+38.75（+0.51%）」寫法；prompt 規定漲跌欄表頭必含「漲跌」。現有與未來報告都適用。
+- 報告只寫結果，不寫 AI 的查證過程或自言自語（例：「我確認了…」「更正上表」「不，台灣 23:00」「這個名稱不在中文對照表內」）。第 1 節開頭只留「以下皆為 CNBC Top News RSS 的 11/02 新聞」；第 2 節開頭只留「來源：ForexFactory 日曆，頁面時間為台灣時間。」。prompt 已禁止，`reportcheck` 以明確字樣檢查，出現即視為格式不合格；已存的 2026-11-02 報告也已清除這類文字。
 - 網頁不抓即時報價，只顯示 09:00 產生的快照，歷史報告保留當時的數字（維持 2.2）。
 
 ## 9. 待使用者決定

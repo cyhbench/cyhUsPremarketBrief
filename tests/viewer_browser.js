@@ -93,6 +93,23 @@ const text = (page, sel) => page.locator(sel).first().innerText();
       await ctx.close();
     }
 
+    // 2b. 實際報告（reports/2026-11-02.md）的「漲跌」「盤前漲跌」與「+38.75（+0.51%）」也要上色
+    {
+      const REAL = read(path.join(__dirname, '../reports/2026-11-02.md'));
+      const { page, ctx } = await open(browser, { w: 1280 }, site({ '/reports/2026-11-02.md': { body: REAL } }), '#2026-11-02');
+      await settle(page);
+      const col = await page.evaluate(() => {
+        const out = {};
+        for (const e of document.querySelectorAll('.up, .down')) if (e.offsetParent !== null) out[e.textContent.trim()] = e.className;
+        return out;
+      });
+      eq(col['-0.33%'], 'down', '真實報告 亞太 -0.33%'); eq(col['+2.24%'], 'up', '真實報告 亞太 +2.24%');
+      eq(col['+38.75（+0.51%）'], 'up', '真實報告 期貨'); eq(col['+1.21%'], 'up', '真實報告 Mag 7 盤前漲跌');
+      eq(col['-140.32（-1.82%）'], 'down', '真實報告 復盤');
+      ok(!('54.5' in col) && !col['63,081.86'], '真實報告 價格不著色');
+      await ctx.close();
+    }
+
     // 3. 超寬表：局部橫捲能到最後一欄、可鍵盤操作、提示只在溢出時顯示、整頁不溢出
     {
       const { page, ctx } = await open(browser, { w: 320 }, site(), '#2026-11-03');
