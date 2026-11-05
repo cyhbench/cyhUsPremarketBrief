@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "title": "美股盤前快報",
-  "state": "blocked",
-  "step": "修正",
+  "state": "done",
+  "step": "驗收",
   "owner": "使用者",
-  "updated": "2026-11-03T11:05+08:00",
-  "note": "已修正漲跌上色與報告自言自語（progress 第 9 節），本機 commit 未 push；待決定：是否上線、格式收斂提案",
+  "updated": "2026-11-06T03:41+08:00",
+  "note": "使用者驗收通過",
   "steps": ["規格", "設計", "實作", "Review", "修正", "驗收"]
 }
