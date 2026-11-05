@@ -187,7 +187,7 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
   - 09:00–09:15 Claude 產生，逾時強制結束。
   - Claude 失敗（非零結束、逾時或格式檢查不過）→ 改用 Codex，限時到 09:24。
   - 09:25 前完成 push；超過就**不發布**並發失敗通知。
-  - GitHub Pages 部署時間（未驗證，要等 repo 建立後實測），目標 09:30 前網站可見。
+  - GitHub Pages 部署時間：目標 09:30 前網站可見（驗收 #17 使用者實跑通過；push 到可見的耗時未另外量測）。
 - 排程用獨立的一次性呼叫，不經過 Telegram bot 的對話 session，也不改動 bot 的程式與設定。只引用共用模組 `~/.local/share/ai-bot-browser/bot_browser.py`；它若改動，本專案的瀏覽設定會跟著變。
 
 ### 5.2 包裝腳本 `bin/run-brief` 步驟
@@ -252,7 +252,7 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 
 15. `systemctl --user list-timers` 顯示的下次觸發時間，EST 期間為台灣 22:00。另用 `TZ=Asia/Taipei systemd-analyze calendar 'Mon..Fri *-*-* 09:00:00 America/New_York' --iterations=3 --base-time='2027-03-11 12:00 Asia/Taipei'` 檢查：03-11、03-12 為 22:00，03-15 起為 21:00。（已實測得到此結果）
 16. 用模擬日期執行腳本（測試用的覆寫日期參數）：2026-11-26（感恩節）不產生報告、不發通知；2026-11-27（早收）產生並註明 13:00 收盤；2026-11-28（週六）不產生。
-17. 上線後連續 5 個交易日，每天 `git log` 的 commit 時間介於美東 09:00–09:25，Pages 網址在 09:30 前可看到當天報告。
+17. 上線後連續 4 個交易日（2026-11-06 使用者決定，原 5 日），每天 `git log` 的 commit 時間介於美東 09:00–09:25，Pages 網址在 09:30 前可看到當天報告。
 18. 模擬 Claude 失敗（測試時把 Claude 指令換成會回非零的指令），報告由 Codex 產生，開頭註明產生者為 Codex，commit message 帶 `codex`。
 19. 模擬兩者都失敗：沒有 commit，Telegram 收到一則含日期與原因的失敗通知，記錄寫明原因。
 20. 模擬超過 09:25：沒有 commit，Telegram 收到失敗通知。
@@ -284,7 +284,8 @@ https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols
 - 報告只寫結果，不寫 AI 的查證過程或自言自語（例：「我確認了…」「更正上表」「不，台灣 23:00」「這個名稱不在中文對照表內」）。第 1 節開頭只留「以下皆為 CNBC Top News RSS 的 11/02 新聞」；第 2 節開頭只留「來源：ForexFactory 日曆，頁面時間為台灣時間。」。prompt 已禁止，`reportcheck` 以明確字樣檢查，出現即視為格式不合格；已存的 2026-11-02 報告也已清除這類文字。
 - 網頁不抓即時報價，只顯示 09:00 產生的快照，歷史報告保留當時的數字（維持 2.2）。
 - 格式收斂提案（progress 第 8 節、ui-design 第 9 節）不做：沿用通用卡片／橫捲保底；代價是未來報告表頭不同時主值不放大，資料仍完整保留。
-- 上線：2026-11-06 使用者驗收通過，專案狀態設為 done；排程自 2026-11-02 起已每日發布報告。
+- 上線：2026-11-06 使用者驗收通過，專案狀態設為 done；排程自 2026-11-02 起已每日發布報告。驗收條件 #11、#17 由使用者實跑，回報通過。
+- 驗收條件 #17 由連續 5 個交易日改為 4 個（2026-11-06 使用者決定）：網站只供閱讀資訊，4 日足以確認發布時間。
 
 ## 9. 待使用者決定
 

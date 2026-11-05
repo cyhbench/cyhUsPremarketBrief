@@ -1,6 +1,6 @@
 # 部署（TG VM）
 
-**尚未啟用**，等使用者驗收後再做。
+已部署並啟用（2026-11-02 起每個交易日發布，2026-11-06 使用者驗收通過，見 `docs/progress.md` 第 10 節）。
 
 ```
 mkdir -p ~/.config/systemd/user ~/projects
