@@ -2,6 +2,11 @@
   "schema_version": 1,
   "reports": [
     {
+      "date": "2026-11-17",
+      "generated_at": "2026-11-17T14:02:00Z",
+      "producer": "claude"
+    },
+    {
       "date": "2026-11-16",
       "generated_at": "2026-11-16T14:02:22Z",
       "producer": "claude"
